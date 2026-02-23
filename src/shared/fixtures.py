@@ -1,21 +1,25 @@
 """Mock handoff fixture writer for the matching stage bootstrap.
 
-Writes deterministic, contract-valid entities.parquet and candidate_pairs.parquet
-so matching development can proceed before real blocking output is available.
+Writes deterministic, contract-valid parquet + embedding fixture artifacts so
+matching development can proceed before real blocking output is available.
 All IDs are derived from fixed seeds so repeated calls produce identical files.
 """
 
 import hashlib
 from pathlib import Path
 
+import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 
 from src.shared import schemas
+from src.shared.validators import validate_embedding_alignment
 
 
 # Default run identifier used by all fixture helpers.
 DEFAULT_RUN_ID = "mock_run_001"
+_EMBEDDING_DIM = 768
+_EMBEDDING_SEED = 42
 
 # Pyarrow type for a single position struct in the positions list column.
 _POSITION_TYPE = pa.struct([
@@ -100,19 +104,18 @@ def build_mock_entities(run_id: str = DEFAULT_RUN_ID) -> pa.Table:
          50, 65, "Konto i Den Norske Bank ble sperret.",     1, [_pos(_CK_B1, 50, 65)]),
     ]
 
-    
     n = len(rows)
     return pa.table(
         {
             "run_id":      pa.array([run_id] * n,            type=pa.string()),
-            "entity_id":   pa.array([r[0] for r in rows],   type=pa.string()), 
-            "doc_id":      pa.array([r[1] for r in rows],   type=pa.string()), 
+            "entity_id":   pa.array([r[0] for r in rows],   type=pa.string()),
+            "doc_id":      pa.array([r[1] for r in rows],   type=pa.string()),
             "chunk_id":    pa.array([r[2] for r in rows],   type=pa.string()),
             "text":        pa.array([r[3] for r in rows],   type=pa.string()),
             "normalized":  pa.array([r[4] for r in rows],   type=pa.string()),
             "type":        pa.array([r[5] for r in rows],   type=pa.string()),
-            "char_start":  pa.array([r[6] for r in rows],   type=pa.int32()), 
-            "char_end":    pa.array([r[7] for r in rows],   type=pa.int32()), 
+            "char_start":  pa.array([r[6] for r in rows],   type=pa.int32()),
+            "char_end":    pa.array([r[7] for r in rows],   type=pa.int32()),
             "context":     pa.array([r[8] for r in rows],   type=pa.string()),
             "count":       pa.array([r[9] for r in rows],   type=pa.int32()),
             "positions":   pa.array([r[10] for r in rows],  type=pa.list_(_POSITION_TYPE)),
@@ -163,8 +166,42 @@ def build_mock_candidates(run_id: str, entities: pa.Table) -> pa.Table:
     )
 
 
+def _l2_normalize_rows(matrix: np.ndarray) -> np.ndarray:
+    """L2-normalize each row, keeping float32 output."""
+    norms = np.linalg.norm(matrix, axis=1, keepdims=True)
+    return (matrix / (norms + 1e-12)).astype("float32")
+
+
+def build_mock_embedding_artifacts(
+    entities: pa.Table,
+    seed: int = _EMBEDDING_SEED,
+    embedding_dim: int = _EMBEDDING_DIM,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Build deterministic embedding artifacts aligned to fixture entity row order.
+
+    Args:
+        entities: Entity table from build_mock_entities().
+        seed: RNG seed for deterministic values.
+        embedding_dim: Embedding width (default 768).
+
+    Returns:
+        Tuple of (embeddings, context_embeddings, embedding_entity_ids).
+    """
+    entity_ids = np.array(entities.column("entity_id").to_pylist())
+    n_entities = len(entity_ids)
+
+    rng = np.random.default_rng(seed=seed)
+    embeddings = rng.normal(size=(n_entities, embedding_dim)).astype("float32")
+    context_embeddings = rng.normal(size=(n_entities, embedding_dim)).astype("float32")
+    return (
+        _l2_normalize_rows(embeddings),
+        _l2_normalize_rows(context_embeddings),
+        entity_ids,
+    )
+
+
 def write_mock_handoff(out_dir: Path, run_id: str = DEFAULT_RUN_ID) -> None:
-    """Write entities.parquet and candidate_pairs.parquet to out_dir.
+    """Write handoff fixture files to out_dir.
 
     The output is fully deterministic: the same run_id always produces
     bit-identical files. Intended for use in tests and early matching
@@ -179,6 +216,15 @@ def write_mock_handoff(out_dir: Path, run_id: str = DEFAULT_RUN_ID) -> None:
 
     entities = build_mock_entities(run_id)
     candidates = build_mock_candidates(run_id, entities)
+    embeddings, context_embeddings, embedding_entity_ids = build_mock_embedding_artifacts(
+        entities
+    )
+    validate_embedding_alignment(
+        embeddings=embeddings,
+        context_embeddings=context_embeddings,
+        embedding_entity_ids=embedding_entity_ids,
+        entity_ids=entities.column("entity_id").to_pylist(),
+    )
 
     # Validate before writing — catch contract violations early rather than silently
     # persisting bad fixtures that would cause confusing failures downstream.
@@ -192,5 +238,6 @@ def write_mock_handoff(out_dir: Path, run_id: str = DEFAULT_RUN_ID) -> None:
 
     pq.write_table(entities,   out_dir / "entities.parquet")
     pq.write_table(candidates, out_dir / "candidate_pairs.parquet")
-
-
+    np.save(out_dir / "embeddings.npy", embeddings)
+    np.save(out_dir / "context_embeddings.npy", context_embeddings)
+    np.save(out_dir / "embedding_entity_ids.npy", embedding_entity_ids)

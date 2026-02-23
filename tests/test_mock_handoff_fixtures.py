@@ -129,6 +129,9 @@ def test_write_mock_handoff_creates_files(tmp_path) -> None:
     write_mock_handoff(tmp_path)
     assert (tmp_path / "entities.parquet").exists()
     assert (tmp_path / "candidate_pairs.parquet").exists()
+    assert (tmp_path / "embeddings.npy").exists()
+    assert (tmp_path / "context_embeddings.npy").exists()
+    assert (tmp_path / "embedding_entity_ids.npy").exists()
 
 
 def test_written_files_pass_contract_rules(tmp_path) -> None:
@@ -146,7 +149,13 @@ def test_determinism(tmp_path) -> None:
     write_mock_handoff(dir_a)
     write_mock_handoff(dir_b)
 
-    for fname in ("entities.parquet", "candidate_pairs.parquet"):
+    for fname in (
+        "entities.parquet",
+        "candidate_pairs.parquet",
+        "embeddings.npy",
+        "context_embeddings.npy",
+        "embedding_entity_ids.npy",
+    ):
         bytes_a = (dir_a / fname).read_bytes()
         bytes_b = (dir_b / fname).read_bytes()
         assert bytes_a == bytes_b, f"{fname}: output differs between runs"
