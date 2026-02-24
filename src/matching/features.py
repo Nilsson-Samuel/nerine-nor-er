@@ -1,17 +1,23 @@
-"""DuckDB join loader and string/token feature functions for matching.
+"""Matching loaders and string/token feature functions.
 
-The loader resolves entity names from candidate pairs via a double JOIN.
-String/token features are computed row-wise: 5 similarity scores in [0,1]
-and 2 binary flags in {0,1}. No embedding or DuckDB dependency in the
-feature functions — pure Python + rapidfuzz + metaphone.
+Includes:
+- DuckDB pair/name loader for candidate pairs.
+- Embedding artifact loader with strict alignment guards.
+- String/token features computed row-wise: 5 similarity scores in [0,1]
+  and 2 binary flags in {0,1}.
 """
 
 from pathlib import Path
+from typing import NamedTuple
 
 import duckdb
+import numpy as np
 import polars as pl
+import pyarrow.parquet as pq
 from metaphone import doublemetaphone
 from rapidfuzz.distance import JaroWinkler, Levenshtein
+
+from src.shared.validators import validate_embedding_alignment
 
 
 # ---------------------------------------------------------------------------
@@ -72,6 +78,74 @@ def load_pairs_with_names(
         )
         table = con.execute(_LOAD_PAIRS_QUERY, [run_id]).fetch_arrow_table()
         return pl.from_arrow(table)
+
+
+# ---------------------------------------------------------------------------
+# Embedding artifact loader (foundation for cosine features)
+# ---------------------------------------------------------------------------
+
+class EmbeddingArtifacts(NamedTuple):
+    """Immutable bundle of loaded embedding artifacts."""
+
+    embeddings: np.ndarray
+    context_embeddings: np.ndarray
+    embedding_entity_ids: np.ndarray
+
+
+def validate_loaded_embeddings(
+    embeddings: np.ndarray,
+    context_embeddings: np.ndarray,
+    embedding_entity_ids: np.ndarray,
+    entity_ids: list[str] | np.ndarray,
+) -> None:
+    """Validate loaded embedding artifacts by delegating shared invariants."""
+    validate_embedding_alignment(
+        embeddings=embeddings,
+        context_embeddings=context_embeddings,
+        embedding_entity_ids=embedding_entity_ids,
+        entity_ids=entity_ids,
+    )
+
+
+def build_embedding_id_index(entity_ids: np.ndarray) -> dict[str, int]:
+    """Build a deterministic entity_id -> embedding row index map.
+
+    Raises:
+        ValueError: If IDs are not unique.
+    """
+    ids = [str(entity_id) for entity_id in np.asarray(entity_ids).tolist()]
+    index = {entity_id: i for i, entity_id in enumerate(ids)}
+    if len(index) != len(ids):
+        raise ValueError("embedding_entity_ids must contain unique IDs")
+    return index
+
+
+def load_embedding_artifacts(data_dir: Path | str) -> EmbeddingArtifacts:
+    """Load embedding artifacts from data_dir and enforce alignment invariants.
+
+    Required files:
+    - embeddings.npy
+    - context_embeddings.npy
+    - embedding_entity_ids.npy
+    - entities.parquet (source of expected entity row order)
+    """
+    data_dir = Path(data_dir)
+    embeddings = np.load(data_dir / "embeddings.npy", allow_pickle=False)
+    context_embeddings = np.load(data_dir / "context_embeddings.npy", allow_pickle=False)
+    embedding_entity_ids = np.load(data_dir / "embedding_entity_ids.npy", allow_pickle=False)
+    entities = pq.read_table(data_dir / "entities.parquet", columns=["entity_id"])
+
+    validate_loaded_embeddings(
+        embeddings=embeddings,
+        context_embeddings=context_embeddings,
+        embedding_entity_ids=embedding_entity_ids,
+        entity_ids=entities.column("entity_id").to_pylist(),
+    )
+    return EmbeddingArtifacts(
+        embeddings=embeddings,
+        context_embeddings=context_embeddings,
+        embedding_entity_ids=embedding_entity_ids,
+    )
 
 
 # ---------------------------------------------------------------------------
