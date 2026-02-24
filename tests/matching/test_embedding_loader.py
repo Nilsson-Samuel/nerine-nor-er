@@ -49,6 +49,15 @@ def test_load_embedding_artifacts_rejects_mismatched_id_order(handoff_dir: Path)
         load_embedding_artifacts(handoff_dir)
 
 
+def test_load_embedding_artifacts_rejects_non_normalized_rows(handoff_dir: Path) -> None:
+    embeddings = np.load(handoff_dir / "embeddings.npy", allow_pickle=False)
+    embeddings[0] = embeddings[0] * 2.0
+    np.save(handoff_dir / "embeddings.npy", embeddings)
+
+    with pytest.raises(ValueError, match="L2-normalized"):
+        load_embedding_artifacts(handoff_dir)
+
+
 def test_build_embedding_id_index_is_complete_and_stable(handoff_dir: Path) -> None:
     artifacts = load_embedding_artifacts(handoff_dir)
     index = build_embedding_id_index(artifacts.embedding_entity_ids)

@@ -92,6 +92,12 @@ class EmbeddingArtifacts(NamedTuple):
     embedding_entity_ids: np.ndarray
 
 
+EMBEDDING_FEATURE_COLUMNS = [
+    "cosine_sim_entity",
+    "cosine_sim_context",
+]
+
+
 def validate_loaded_embeddings(
     embeddings: np.ndarray,
     context_embeddings: np.ndarray,
@@ -145,6 +151,75 @@ def load_embedding_artifacts(data_dir: Path | str) -> EmbeddingArtifacts:
         embeddings=embeddings,
         context_embeddings=context_embeddings,
         embedding_entity_ids=embedding_entity_ids,
+    )
+
+
+def cosine_sim_from_lookup(
+    entity_id_a: str,
+    entity_id_b: str,
+    matrix: np.ndarray,
+    id_index: dict[str, int],
+) -> float:
+    """Compute cosine similarity from entity IDs and an aligned embedding matrix.
+
+    Embeddings are expected to be L2-normalized upstream, so cosine is a dot
+    product. Numeric noise is clipped into [0.0, 1.0].
+    """
+    score = float(np.dot(matrix[id_index[entity_id_a]], matrix[id_index[entity_id_b]]))
+    return float(np.clip(score, 0.0, 1.0))
+
+
+def _lookup_embedding_row_indices(
+    entity_ids: pl.Series,
+    id_index: dict[str, int],
+    column_name: str,
+) -> np.ndarray:
+    """Map entity IDs to embedding row indices with clear missing-ID errors."""
+    values = entity_ids.to_list()
+    try:
+        return np.fromiter((id_index[entity_id] for entity_id in values), dtype=np.int64)
+    except KeyError as exc:
+        raise ValueError(
+            f"{column_name} contains ID {exc.args[0]!r} missing from embedding_entity_ids"
+        ) from exc
+
+
+def build_embedding_features(
+    pairs_df: pl.DataFrame,
+    artifacts: EmbeddingArtifacts,
+) -> pl.DataFrame:
+    """Compute cosine_sim_entity and cosine_sim_context for each pair row.
+
+    Returns only the two embedding feature columns, preserving input row order.
+    """
+    if pairs_df.is_empty():
+        return pl.DataFrame(
+            schema={
+                "cosine_sim_entity": pl.Float64,
+                "cosine_sim_context": pl.Float64,
+            }
+        )
+
+    id_index = build_embedding_id_index(artifacts.embedding_entity_ids)
+    idx_a = _lookup_embedding_row_indices(pairs_df["entity_id_a"], id_index, "entity_id_a")
+    idx_b = _lookup_embedding_row_indices(pairs_df["entity_id_b"], id_index, "entity_id_b")
+
+    entity_cosine = np.einsum(
+        "ij,ij->i",
+        artifacts.embeddings[idx_a],
+        artifacts.embeddings[idx_b],
+    )
+    context_cosine = np.einsum(
+        "ij,ij->i",
+        artifacts.context_embeddings[idx_a],
+        artifacts.context_embeddings[idx_b],
+    )
+
+    return pl.DataFrame(
+        {
+            "cosine_sim_entity": np.clip(entity_cosine, 0.0, 1.0).astype(np.float64),
+            "cosine_sim_context": np.clip(context_cosine, 0.0, 1.0).astype(np.float64),
+        }
     )
 
 
