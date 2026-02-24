@@ -1,13 +1,15 @@
-"""Matching loaders and string/token feature functions.
+"""Matching loaders and feature functions.
 
 Includes:
 - DuckDB pair/name loader for candidate pairs.
 - Embedding artifact loader with strict alignment guards.
+- Structured identity flags from context/name/type fields.
 - String/token features computed row-wise: 5 similarity scores in [0,1]
   and 2 binary flags in {0,1}.
 """
 
 from pathlib import Path
+import re
 from typing import NamedTuple
 
 import duckdb
@@ -238,6 +240,106 @@ def _phonetic_normalize(name: str) -> str:
     name = name.replace("hj", "j").replace("gj", "j")
     name = name.replace("æ", "ae").replace("ø", "o").replace("å", "a")
     return name
+
+
+# ---------------------------------------------------------------------------
+# Structured identity feature helpers
+# ---------------------------------------------------------------------------
+
+NORWEGIAN_ID_RE = re.compile(r"\b\d{11}\b")
+
+STRUCTURED_IDENTITY_FEATURE_COLUMNS = [
+    "norwegian_id_match",
+    "first_name_match",
+    "last_name_match",
+]
+
+
+def norwegian_id_match(context_a: str, context_b: str) -> int:
+    """Return 1 if both contexts contain an overlapping 11-digit identifier."""
+    ids_in_context_a = set(NORWEGIAN_ID_RE.findall(context_a or ""))
+    ids_in_context_b = set(NORWEGIAN_ID_RE.findall(context_b or ""))
+    return int(bool(ids_in_context_a) and bool(ids_in_context_b & ids_in_context_a))
+
+
+def _name_tokens(name: str) -> list[str]:
+    """Whitespace-tokenize a name after trimming outer whitespace."""
+    return (name or "").strip().split()
+
+
+def _is_per_pair(type_a: str, type_b: str) -> bool:
+    """True when both entity types are PER (case-insensitive)."""
+    return (type_a or "").upper() == "PER" and (type_b or "").upper() == "PER"
+
+
+def first_name_match(name_a: str, name_b: str, type_a: str, type_b: str) -> int:
+    """Return 1 if PER-only first tokens match, else 0."""
+    if not _is_per_pair(type_a, type_b):
+        return 0
+    tokens_a = _name_tokens(name_a)
+    tokens_b = _name_tokens(name_b)
+    if not tokens_a or not tokens_b:
+        return 0
+    return int(tokens_a[0].casefold() == tokens_b[0].casefold())
+
+
+def last_name_match(name_a: str, name_b: str, type_a: str, type_b: str) -> int:
+    """Return 1 if PER-only last tokens match, else 0."""
+    if not _is_per_pair(type_a, type_b):
+        return 0
+    tokens_a = _name_tokens(name_a)
+    tokens_b = _name_tokens(name_b)
+    if not tokens_a or not tokens_b:
+        return 0
+    return int(tokens_a[-1].casefold() == tokens_b[-1].casefold())
+
+
+def build_structured_identity_features(pairs_df: pl.DataFrame) -> pl.DataFrame:
+    """Build structured identity flags in stable row order.
+
+    Expects input columns:
+    - context_a, context_b
+    - name_a, name_b
+    - entity_type_a, entity_type_b
+    """
+    if pairs_df.is_empty():
+        return pl.DataFrame(
+            schema={
+                "norwegian_id_match": pl.Int64,
+                "first_name_match": pl.Int64,
+                "last_name_match": pl.Int64,
+            }
+        )
+
+    ids_a = pl.col("context_a").fill_null("").str.extract_all(NORWEGIAN_ID_RE.pattern)
+    ids_b = pl.col("context_b").fill_null("").str.extract_all(NORWEGIAN_ID_RE.pattern)
+
+    per_pair = (
+        pl.col("entity_type_a").fill_null("").str.to_uppercase().eq("PER")
+        & pl.col("entity_type_b").fill_null("").str.to_uppercase().eq("PER")
+    )
+    first_a = pl.col("name_a").fill_null("").str.extract(r"^\s*(\S+)", group_index=1)
+    first_b = pl.col("name_b").fill_null("").str.extract(r"^\s*(\S+)", group_index=1)
+    last_a = pl.col("name_a").fill_null("").str.extract(r"(\S+)\s*$", group_index=1)
+    last_b = pl.col("name_b").fill_null("").str.extract(r"(\S+)\s*$", group_index=1)
+
+    return pairs_df.select(
+        (
+            (ids_a.list.len() > 0) & (ids_a.list.set_intersection(ids_b).list.len() > 0)
+        ).cast(pl.Int64).alias("norwegian_id_match"),
+        (
+            per_pair
+            & first_a.is_not_null()
+            & first_b.is_not_null()
+            & first_a.str.to_lowercase().eq(first_b.str.to_lowercase())
+        ).cast(pl.Int64).alias("first_name_match"),
+        (
+            per_pair
+            & last_a.is_not_null()
+            & last_b.is_not_null()
+            & last_a.str.to_lowercase().eq(last_b.str.to_lowercase())
+        ).cast(pl.Int64).alias("last_name_match"),
+    )
 
 
 # ---------------------------------------------------------------------------
