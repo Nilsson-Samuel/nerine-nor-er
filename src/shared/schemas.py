@@ -23,6 +23,16 @@ DOCS_SCHEMA = pa.schema([
     ("extracted_at", pa.timestamp("us", tz="UTC")),
 ])
 
+CHUNKS_SCHEMA = pa.schema([
+    ("run_id", pa.string()),
+    ("chunk_id", pa.string()),  # 32-char lowercase hex (hash of doc_id:chunk_index)
+    ("doc_id", pa.string()),  # FK to docs(run_id, doc_id)
+    ("chunk_index", pa.int32()),  # >= 0
+    ("text", pa.string()),  # Non-empty chunk text
+    ("source_unit_kind", pa.string()),  # pdf_page | docx_paragraph
+    ("page_num", pa.int32()),  # Page/paragraph index where chunk starts
+])
+
 VALID_MIME_TYPES = {
     "application/pdf",
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -127,6 +137,12 @@ def validate_contract_rules(table: pa.Table, contract_name: str) -> list[str]:
             return schema_errors
         return _validate_docs_rules(table)
 
+    if contract_name in {"chunks", "chunks.parquet"}:
+        schema_errors = validate(table, CHUNKS_SCHEMA)
+        if schema_errors:
+            return schema_errors
+        return _validate_chunks_rules(table)
+
     if contract_name in {"entities", "entities.parquet"}:
         schema_errors = validate(table, ENTITIES_SCHEMA)
         if schema_errors:
@@ -190,6 +206,58 @@ def _validate_docs_rules(table: pa.Table) -> list[str]:
         if path_key in seen_path_keys:
             errors.append(f"row {row_index}: duplicate (run_id, path) key")
         seen_path_keys.add(path_key)
+
+    return errors
+
+
+# Validate row-level chunk invariants and uniqueness for chunks.parquet.
+def _validate_chunks_rules(table: pa.Table) -> list[str]:
+    errors: list[str] = []
+    seen_chunk_keys: set[tuple[str, str]] = set()
+    seen_index_keys: set[tuple[str, str, int]] = set()
+
+    for row_index, row in enumerate(table.to_pylist(), start=1):
+        run_id = row["run_id"]
+        chunk_id = row["chunk_id"]
+        doc_id = row["doc_id"]
+        chunk_idx = row["chunk_index"]
+        text = row["text"]
+        source_unit_kind = row["source_unit_kind"]
+        page_num = row["page_num"]
+
+        if not _is_lower_trimmed_non_empty(run_id):
+            errors.append(
+                f"row {row_index}: run_id must be lowercase, trimmed, non-empty"
+            )
+        if not _is_hex32(chunk_id):
+            errors.append(f"row {row_index}: chunk_id must be 32-char lowercase hex")
+        if not _is_hex32(doc_id):
+            errors.append(f"row {row_index}: doc_id must be 32-char lowercase hex")
+        if not isinstance(chunk_idx, int) or chunk_idx < 0:
+            errors.append(f"row {row_index}: chunk_index must be >= 0")
+        if not _is_non_empty_string(text):
+            errors.append(f"row {row_index}: text must be non-empty")
+        if source_unit_kind not in VALID_SOURCE_UNIT_KINDS:
+            errors.append(
+                f"row {row_index}: source_unit_kind must be one of "
+                f"{sorted(VALID_SOURCE_UNIT_KINDS)}"
+            )
+        if not isinstance(page_num, int) or page_num < 0:
+            errors.append(f"row {row_index}: page_num must be >= 0")
+
+        # Uniqueness: (run_id, chunk_id)
+        chunk_key = (run_id, chunk_id)
+        if chunk_key in seen_chunk_keys:
+            errors.append(f"row {row_index}: duplicate (run_id, chunk_id) key")
+        seen_chunk_keys.add(chunk_key)
+
+        # Uniqueness: (run_id, doc_id, chunk_index)
+        index_key = (run_id, doc_id, chunk_idx)
+        if index_key in seen_index_keys:
+            errors.append(
+                f"row {row_index}: duplicate (run_id, doc_id, chunk_index) key"
+            )
+        seen_index_keys.add(index_key)
 
     return errors
 

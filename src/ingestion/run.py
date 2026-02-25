@@ -1,11 +1,14 @@
-"""Ingestion stage orchestrator — discovery, registration, extraction, normalization.
+"""Ingestion stage orchestrator — discovery, registration, extraction, normalization, chunking.
 
-Covers S2.1 (discovery + registration → docs.parquet) and
-S2.2 (extraction + normalization → text units with page_count backfill).
-Will be extended with chunking in S2.3.
+Orchestrates the full ingestion pipeline: discover files, register docs,
+extract and normalize text, chunk into overlapping segments, and persist
+docs.parquet + chunks.parquet with run metadata.
 """
 
+import json
 import logging
+import statistics
+import time
 from pathlib import Path
 from uuid import uuid4
 
@@ -13,17 +16,170 @@ import duckdb
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from src.ingestion.chunking import build_splitter, chunk_document
 from src.ingestion.discovery import discover_documents
 from src.ingestion.extraction import extract_docx_units, extract_pdf_units
 from src.ingestion.normalization import normalize_text
 from src.ingestion.registration import register_documents
-from src.shared.schemas import DOCS_SCHEMA
+from src.shared.schemas import CHUNKS_SCHEMA, DOCS_SCHEMA
 
 logger = logging.getLogger(__name__)
 
 # Threshold for flagging extraction as too short (chars after normalization)
 _MIN_EXTRACTED_CHARS = 20
 
+
+def run_ingestion(
+    case_root: Path,
+    data_dir: Path,
+    run_id: str | None = None,
+    con: duckdb.DuckDBPyConnection | None = None,
+) -> str:
+    """Run the full ingestion pipeline: discover → register → extract → chunk → write.
+
+    Args:
+        case_root: Root directory containing input PDF/DOCX files.
+        data_dir: Output directory for parquet files (e.g. data/processed/).
+        run_id: Optional run identifier. Generated as 32-char hex if not provided.
+        con: Optional DuckDB connection. Created in-memory if not provided.
+
+    Returns:
+        The run_id used for this execution.
+    """
+    t0 = time.monotonic()
+
+    if run_id is None:
+        run_id = uuid4().hex[:32]
+    if con is None:
+        con = duckdb.connect()
+
+    # Step 1–2: Discover and register
+    run_id = run_discovery_and_registration(case_root, data_dir, run_id, con)
+
+    # Step 3–5: Extract and normalize
+    units_by_doc = run_extraction_and_normalization(case_root, data_dir, run_id, con)
+
+    if not units_by_doc:
+        logger.warning("No text units extracted — skipping chunking.")
+        _write_run_metadata(data_dir, run_id, 0, 0, [], time.monotonic() - t0)
+        return run_id
+
+    # Step 6: Chunk all documents
+    all_chunks = _run_chunking(units_by_doc, run_id)
+
+    # Step 7: Write chunks.parquet
+    _write_chunks_parquet(all_chunks, run_id, data_dir, con)
+
+    # Run metadata
+    chunks_per_doc = _chunks_per_doc(all_chunks)
+    doc_count = len(units_by_doc)
+    _write_run_metadata(
+        data_dir, run_id, doc_count, len(all_chunks),
+        chunks_per_doc, time.monotonic() - t0,
+    )
+
+    elapsed = time.monotonic() - t0
+    logger.info(
+        "Ingestion complete: %d docs, %d chunks in %.1fs (run_id=%s)",
+        doc_count, len(all_chunks), elapsed, run_id,
+    )
+    return run_id
+
+
+def _run_chunking(
+    units_by_doc: dict[str, list[dict]], run_id: str,
+) -> list[dict]:
+    """Chunk all documents and return flat list of chunk rows."""
+    splitter = build_splitter()
+    all_chunks: list[dict] = []
+
+    for doc_id in sorted(units_by_doc.keys()):
+        units = units_by_doc[doc_id]
+        doc_chunks = chunk_document(doc_id, units, splitter)
+        for chunk in doc_chunks:
+            chunk["run_id"] = run_id
+        all_chunks.extend(doc_chunks)
+
+    logger.info("Chunked %d documents → %d chunks", len(units_by_doc), len(all_chunks))
+    return all_chunks
+
+
+def _write_chunks_parquet(
+    chunks: list[dict],
+    run_id: str,
+    data_dir: Path,
+    con: duckdb.DuckDBPyConnection,
+) -> None:
+    """Write chunk rows to chunks.parquet (atomic temp+rename)."""
+    data_dir = Path(data_dir)
+    chunks_path = data_dir / "chunks.parquet"
+
+    if not chunks:
+        logger.info("No chunks to write.")
+        return
+
+    # Build columnar arrays in schema order
+    arrays: dict[str, list] = {field.name: [] for field in CHUNKS_SCHEMA}
+    for row in chunks:
+        for field in CHUNKS_SCHEMA:
+            arrays[field.name].append(row[field.name])
+
+    table = pa.table(arrays, schema=CHUNKS_SCHEMA)
+
+    # Append to existing file if present
+    if chunks_path.exists():
+        existing = pq.read_table(chunks_path)
+        table = pa.concat_tables([existing, table])
+
+    # Atomic write via temp file
+    tmp_path = chunks_path.with_suffix(".tmp")
+    pq.write_table(table, tmp_path)
+    tmp_path.rename(chunks_path)
+
+    # Register in DuckDB
+    con.execute(
+        f"CREATE OR REPLACE TABLE chunks AS SELECT * FROM '{chunks_path}'"
+    )
+
+    logger.info("Wrote %d chunk rows to %s", len(chunks), chunks_path)
+
+
+def _chunks_per_doc(chunks: list[dict]) -> list[int]:
+    """Count chunks per doc_id for metadata stats."""
+    counts: dict[str, int] = {}
+    for c in chunks:
+        counts[c["doc_id"]] = counts.get(c["doc_id"], 0) + 1
+    return list(counts.values())
+
+
+def _write_run_metadata(
+    data_dir: Path,
+    run_id: str,
+    doc_count: int,
+    chunk_count: int,
+    chunks_per_doc: list[int],
+    elapsed_seconds: float,
+) -> None:
+    """Write run_metadata.json with summary counts and timing."""
+    meta = {
+        "run_id": run_id,
+        "docs_processed": doc_count,
+        "chunk_count": chunk_count,
+        "elapsed_seconds": round(elapsed_seconds, 2),
+    }
+    if chunks_per_doc:
+        meta["chunks_per_doc_min"] = min(chunks_per_doc)
+        meta["chunks_per_doc_max"] = max(chunks_per_doc)
+        meta["chunks_per_doc_median"] = round(statistics.median(chunks_per_doc), 1)
+
+    meta_path = Path(data_dir) / "run_metadata.json"
+    meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+    logger.info("Wrote run metadata to %s", meta_path)
+
+
+# ---------------------------------------------------------------------------
+# Sub-stage functions (used by run_ingestion and existing tests)
+# ---------------------------------------------------------------------------
 
 def run_discovery_and_registration(
     case_root: Path,
