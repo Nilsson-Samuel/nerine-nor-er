@@ -111,6 +111,52 @@ def test_loader_accepts_existing_connection(handoff_dir: Path) -> None:
     assert set(df.columns) == _EXPECTED_COLUMNS
 
 
+def test_loader_accepts_existing_connection_with_minimal_columns() -> None:
+    # Backward compatibility: only name-loader columns are required.
+    con = duckdb.connect()
+    con.execute(
+        """
+        CREATE TABLE entities (
+            run_id VARCHAR,
+            entity_id VARCHAR,
+            normalized VARCHAR
+        )
+        """
+    )
+    con.execute(
+        """
+        INSERT INTO entities VALUES
+            ('run_minimal', 'a', 'alice'),
+            ('run_minimal', 'b', 'bob')
+        """
+    )
+    con.execute(
+        """
+        CREATE TABLE candidate_pairs (
+            run_id VARCHAR,
+            entity_id_a VARCHAR,
+            entity_id_b VARCHAR
+        )
+        """
+    )
+    con.execute(
+        "INSERT INTO candidate_pairs VALUES ('run_minimal', 'a', 'b')"
+    )
+
+    df = load_pairs_with_names(con, "run_minimal")
+
+    assert df.columns == ["run_id", "entity_id_a", "entity_id_b", "name_a", "name_b"]
+    assert df.to_dicts() == [
+        {
+            "run_id": "run_minimal",
+            "entity_id_a": "a",
+            "entity_id_b": "b",
+            "name_a": "alice",
+            "name_b": "bob",
+        }
+    ]
+
+
 # ---------------------------------------------------------------------------
 # writer: write_string_features
 # ---------------------------------------------------------------------------

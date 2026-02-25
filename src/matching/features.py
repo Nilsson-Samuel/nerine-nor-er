@@ -2,8 +2,10 @@
 
 Includes:
 - DuckDB pair/name loader for candidate pairs.
+- DuckDB pair metadata loader for context/type/doc/blocking fields.
 - Embedding artifact loader with strict alignment guards.
 - Structured identity flags from context/name/type fields.
+- Co-occurrence/blocking metadata features.
 - String/token features computed row-wise: 5 similarity scores in [0,1]
   and 2 binary flags in {0,1}.
 """
@@ -26,9 +28,9 @@ from src.shared.validators import validate_embedding_alignment
 # DuckDB join loader for candidate pairs with entity names
 # ---------------------------------------------------------------------------
 
-# Double-join query: resolves name_a/name_b from entities for each candidate pair.
+# Double-join query: resolves names only.
 # Ordered so downstream feature builders always see a stable row sequence.
-_LOAD_PAIRS_QUERY = """
+_LOAD_PAIRS_WITH_NAMES_QUERY = """
 SELECT
     c.run_id,
     c.entity_id_a,
@@ -41,6 +43,69 @@ JOIN entities e2 ON c.run_id = e2.run_id AND c.entity_id_b = e2.entity_id
 WHERE c.run_id = ?
 ORDER BY c.entity_id_a, c.entity_id_b
 """
+
+# Double-join query: resolves pair metadata from entities/candidate_pairs.
+# Ordered so downstream feature builders always see a stable row sequence.
+_LOAD_PAIRS_WITH_METADATA_QUERY = """
+SELECT
+    c.run_id,
+    c.entity_id_a,
+    c.entity_id_b,
+    e1.normalized AS name_a,
+    e2.normalized AS name_b,
+    e1.context AS context_a,
+    e2.context AS context_b,
+    e1.type AS entity_type_a,
+    e2.type AS entity_type_b,
+    e1.doc_id AS doc_id_a,
+    e2.doc_id AS doc_id_b,
+    c.blocking_method_count
+FROM candidate_pairs c
+JOIN entities e1 ON c.run_id = e1.run_id AND c.entity_id_a = e1.entity_id
+JOIN entities e2 ON c.run_id = e2.run_id AND c.entity_id_b = e2.entity_id
+WHERE c.run_id = ?
+ORDER BY c.entity_id_a, c.entity_id_b
+"""
+
+PAIR_NAME_COLUMNS = [
+    "run_id",
+    "entity_id_a",
+    "entity_id_b",
+    "name_a",
+    "name_b",
+]
+
+PAIR_METADATA_COLUMNS = [
+    *PAIR_NAME_COLUMNS,
+    "context_a",
+    "context_b",
+    "entity_type_a",
+    "entity_type_b",
+    "doc_id_a",
+    "doc_id_b",
+    "blocking_method_count",
+]
+
+
+def _execute_pairs_query(
+    db_path_or_con: "duckdb.DuckDBPyConnection | Path | str",
+    run_id: str,
+    query: str,
+) -> pl.DataFrame:
+    """Execute a pair loader query using either a connection or data directory."""
+    if isinstance(db_path_or_con, duckdb.DuckDBPyConnection):
+        table = db_path_or_con.execute(query, [run_id]).fetch_arrow_table()
+        return pl.from_arrow(table)
+
+    data_dir = Path(db_path_or_con)
+    with duckdb.connect() as con:
+        con.register("entities", con.read_parquet(str(data_dir / "entities.parquet")))
+        con.register(
+            "candidate_pairs",
+            con.read_parquet(str(data_dir / "candidate_pairs.parquet")),
+        )
+        table = con.execute(query, [run_id]).fetch_arrow_table()
+        return pl.from_arrow(table)
 
 
 def load_pairs_with_names(
@@ -65,21 +130,26 @@ def load_pairs_with_names(
         Polars DataFrame with columns
         [run_id, entity_id_a, entity_id_b, name_a, name_b].
     """
-    if isinstance(db_path_or_con, duckdb.DuckDBPyConnection):
-        table = db_path_or_con.execute(_LOAD_PAIRS_QUERY, [run_id]).fetch_arrow_table()
-        return pl.from_arrow(table)
+    return _execute_pairs_query(
+        db_path_or_con=db_path_or_con,
+        run_id=run_id,
+        query=_LOAD_PAIRS_WITH_NAMES_QUERY,
+    ).select(PAIR_NAME_COLUMNS)
 
-    # Path-based: use a context-managed connection so it is closed on exit.
-    # read_parquet() takes the path as a Python argument - no SQL string interpolation.
-    data_dir = Path(db_path_or_con)
-    with duckdb.connect() as con:
-        con.register("entities", con.read_parquet(str(data_dir / "entities.parquet")))
-        con.register(
-            "candidate_pairs",
-            con.read_parquet(str(data_dir / "candidate_pairs.parquet")),
-        )
-        table = con.execute(_LOAD_PAIRS_QUERY, [run_id]).fetch_arrow_table()
-        return pl.from_arrow(table)
+
+def load_pairs_with_metadata(
+    db_path_or_con: "duckdb.DuckDBPyConnection | Path | str",
+    run_id: str,
+) -> pl.DataFrame:
+    """Load candidate pairs with name/context/type/doc/blocking metadata.
+
+    Returns exactly the columns listed in PAIR_METADATA_COLUMNS in stable row order.
+    """
+    return _execute_pairs_query(
+        db_path_or_con=db_path_or_con,
+        run_id=run_id,
+        query=_LOAD_PAIRS_WITH_METADATA_QUERY,
+    ).select(PAIR_METADATA_COLUMNS)
 
 
 # ---------------------------------------------------------------------------
@@ -340,6 +410,53 @@ def build_structured_identity_features(pairs_df: pl.DataFrame) -> pl.DataFrame:
             & last_a.str.to_lowercase().eq(last_b.str.to_lowercase())
         ).cast(pl.Int64).alias("last_name_match"),
     )
+
+
+# ---------------------------------------------------------------------------
+# Co-occurrence + blocking metadata feature helpers
+# ---------------------------------------------------------------------------
+
+COOCCURRENCE_META_FEATURE_COLUMNS = [
+    "shared_doc_count",
+    "blocking_method_count",
+]
+
+
+def shared_doc_count(
+    doc_id_a: str | None,
+    doc_id_b: str | None,
+) -> int:
+    """Return 1 when both entities share the same non-empty doc_id, else 0.
+
+    With the current handoff schema, each entity has a single doc_id scalar.
+    This makes shared_doc_count a binary co-occurrence signal (0/1).
+    """
+    if not doc_id_a or not doc_id_b:
+        return 0
+    return int(doc_id_a == doc_id_b)
+
+
+def build_cooccurrence_meta_features(pairs_df: pl.DataFrame) -> pl.DataFrame:
+    """Build shared_doc_count and blocking_method_count in stable row order."""
+    if pairs_df.is_empty():
+        return pl.DataFrame(
+            schema={
+                "shared_doc_count": pl.Int64,
+                "blocking_method_count": pairs_df.schema.get("blocking_method_count", pl.Int64),
+            }
+        )
+
+    shared_counts = [
+        shared_doc_count(doc_id_a, doc_id_b)
+        for doc_id_a, doc_id_b in pairs_df.select("doc_id_a", "doc_id_b").iter_rows()
+    ]
+
+    return pl.DataFrame(
+        {
+            "shared_doc_count": shared_counts,
+            "blocking_method_count": pairs_df["blocking_method_count"],
+        }
+    ).select(COOCCURRENCE_META_FEATURE_COLUMNS)
 
 
 # ---------------------------------------------------------------------------
