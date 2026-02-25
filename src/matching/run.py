@@ -1,5 +1,6 @@
 """Matching feature-stage orchestration and artifact writing."""
 
+import logging
 from pathlib import Path
 
 import polars as pl
@@ -19,6 +20,8 @@ from src.matching.features import (
 from src.matching.writer import write_features
 
 
+logger = logging.getLogger(__name__)
+
 PAIR_KEY_COLUMNS = ["run_id", "entity_id_a", "entity_id_b"]
 FEATURE_COLUMNS = [
     *STRING_FEATURE_COLUMNS,
@@ -27,6 +30,47 @@ FEATURE_COLUMNS = [
     *COOCCURRENCE_META_FEATURE_COLUMNS,
 ]
 FEATURE_OUTPUT_COLUMNS = [*PAIR_KEY_COLUMNS, *FEATURE_COLUMNS]
+
+
+def _feature_diagnostic_values(
+    features_df: pl.DataFrame,
+    feature_column: str,
+) -> tuple[float, float | int | None, float | int | None, float | None]:
+    """Compute non-null rate and numeric summary stats for one feature column."""
+    series = features_df[feature_column]
+    row_count = series.len()
+    if row_count == 0:
+        return (0.0, None, None, None)
+
+    non_null = series.drop_nulls()
+    non_null_count = non_null.len()
+    non_null_rate = non_null_count / row_count
+    if non_null_count == 0:
+        return (non_null_rate, None, None, None)
+
+    return (
+        non_null_rate,
+        non_null.min(),
+        non_null.max(),
+        non_null.mean(),
+    )
+
+
+def _log_feature_diagnostics(features_df: pl.DataFrame) -> None:
+    """Emit lightweight feature diagnostics for quality monitoring."""
+    for column in FEATURE_COLUMNS:
+        non_null_rate, min_value, max_value, mean_value = _feature_diagnostic_values(
+            features_df=features_df,
+            feature_column=column,
+        )
+        logger.info(
+            "feature_diagnostics feature=%s non_null_rate=%.6f min=%s max=%s mean=%s",
+            column,
+            non_null_rate,
+            min_value,
+            max_value,
+            mean_value,
+        )
 
 
 def _ensure_row_alignment(reference: pl.DataFrame, candidate: pl.DataFrame, name: str) -> None:
@@ -80,6 +124,7 @@ def run_features(data_dir: Path | str, run_id: str) -> pl.DataFrame:
         how="horizontal",
     ).select(FEATURE_OUTPUT_COLUMNS)
     _ensure_key_alignment(pairs_df, features_df, "final feature output")
+    _log_feature_diagnostics(features_df)
 
     write_features(features_df, data_dir)
     return features_df
