@@ -57,7 +57,7 @@ def build_doc_row(
         "path": rel_path,
         "mime_type": mime_type,
         "source_unit_kind": source_unit_kind,
-        "page_count": None,  # Filled during extraction (S2.2)
+        "page_count": None,  # Filled during extraction
         "file_size": file_size,
         "extracted_at": extracted_at,
     }
