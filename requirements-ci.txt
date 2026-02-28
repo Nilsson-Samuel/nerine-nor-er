@@ -1,0 +1,7 @@
+pytest==9.0.2
+numpy==2.4.2
+polars==1.38.1
+pyarrow==22.0.0
+duckdb==1.4.4
+Metaphone==0.6
+RapidFuzz==3.14.3
