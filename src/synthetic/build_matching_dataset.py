@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 import numpy as np
+import polars as pl
 import pyarrow as pa
 import pyarrow.parquet as pq
 
@@ -28,6 +29,7 @@ LABELS_SCHEMA = pa.schema([
     ("entity_id_b", pa.string()),
     ("label", pa.int8()),
 ])
+PAIR_KEY_COLUMNS = ["run_id", "entity_id_a", "entity_id_b"]
 
 _POSITION_TYPE = pa.struct([
     ("chunk_id", pa.string()),
@@ -438,6 +440,90 @@ def build_matching_dataset(
     expected_group_ids = {group["group_id"].strip() for group in payload["groups"]}
     if set(group_to_entity_ids) != expected_group_ids:
         raise ValueError("not all groups produced entities")
+
+
+def _load_existing_features(data_dir: Path, run_id: str) -> pl.DataFrame | None:
+    """Load features.parquet for one run when it already exists."""
+    features_path = data_dir / "features.parquet"
+    if not features_path.exists():
+        return None
+
+    features = pl.read_parquet(features_path).filter(pl.col("run_id") == run_id)
+    if features.is_empty():
+        return None
+    return features
+
+
+def _raise_if_duplicate_pair_keys(frame: pl.DataFrame, file_name: str) -> None:
+    """Fail fast when a pair-key table contains duplicates."""
+    duplicate_count = (
+        frame.group_by(PAIR_KEY_COLUMNS)
+        .len()
+        .filter(pl.col("len") > 1)
+        .height
+    )
+    if duplicate_count:
+        raise ValueError(f"{file_name} contains duplicate pair keys")
+
+
+def _raise_if_pair_keys_mismatch(features: pl.DataFrame, labels: pl.DataFrame) -> None:
+    """Require an exact one-to-one pair-key match before joining labels."""
+    _raise_if_duplicate_pair_keys(features.select(PAIR_KEY_COLUMNS), "features.parquet")
+    _raise_if_duplicate_pair_keys(labels.select(PAIR_KEY_COLUMNS), "labels.parquet")
+
+    missing_feature_keys = labels.select(PAIR_KEY_COLUMNS).join(
+        features.select(PAIR_KEY_COLUMNS),
+        on=PAIR_KEY_COLUMNS,
+        how="anti",
+    )
+    if missing_feature_keys.height:
+        raise ValueError("features.parquet is missing keys from labels.parquet")
+
+    extra_feature_keys = features.select(PAIR_KEY_COLUMNS).join(
+        labels.select(PAIR_KEY_COLUMNS),
+        on=PAIR_KEY_COLUMNS,
+        how="anti",
+    )
+    if extra_feature_keys.height:
+        raise ValueError("features.parquet contains keys missing from labels.parquet")
+
+
+def load_labeled_feature_matrix(
+    data_dir: Path | str,
+    run_id: str,
+) -> tuple[pl.DataFrame, pl.Series]:
+    """Load or build a labeled feature matrix for synthetic-model training.
+
+    Args:
+        data_dir: Directory containing synthetic matching artifacts.
+        run_id: Pipeline run identifier to load.
+
+    Returns:
+        Tuple of `(X, y)` where `X` contains only feature columns and `y`
+        contains the aligned binary labels.
+
+    Raises:
+        ValueError: If joining features and labels loses rows.
+    """
+    data_dir = Path(data_dir)
+
+    features = _load_existing_features(data_dir, run_id)
+    if features is None:
+        from src.matching.run import FEATURE_COLUMNS, run_features
+
+        features = run_features(data_dir, run_id)
+    else:
+        from src.matching.run import FEATURE_COLUMNS
+
+    labels = pl.read_parquet(data_dir / "labels.parquet").filter(pl.col("run_id") == run_id)
+    _raise_if_pair_keys_mismatch(features, labels)
+    labeled = features.join(
+        labels,
+        on=PAIR_KEY_COLUMNS,
+        how="inner",
+    )
+
+    return labeled.select(FEATURE_COLUMNS), labeled["label"]
 
 
 def _build_cli_parser() -> argparse.ArgumentParser:
