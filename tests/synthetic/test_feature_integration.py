@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from pathlib import Path
@@ -21,9 +22,62 @@ from src.synthetic.build_matching_dataset import (
 from src.synthetic.validate import validate_synthetic_data
 
 
-IDENTITY_GROUPS_PATH = (
-    Path(__file__).resolve().parents[2] / "data" / "synthetic" / "identity_groups_curated.json"
-)
+_IDENTITY_GROUPS_PAYLOAD = {
+    "run_id": "run_synthetic",
+    "groups": [
+        {
+            "group_id": "per_alice",
+            "entity_type": "PER",
+            "doc_ids": ["case_doc_1", "case_doc_2"],
+            "variants": [
+                {
+                    "text": "Alice Hansen",
+                    "context": "Alice Hansen forklarte seg i avhoret.",
+                },
+                {
+                    "text": "A. Hansen",
+                    "context": "A. Hansen ble observert ved adressen.",
+                },
+            ],
+        },
+        {
+            "group_id": "per_bob",
+            "entity_type": "PER",
+            "doc_ids": ["case_doc_3", "case_doc_4"],
+            "variants": [
+                {
+                    "text": "Bjarne Olsen",
+                    "context": "Bjarne Olsen ble nevnt i rapporten.",
+                },
+                {
+                    "text": "B. Olsen",
+                    "context": "B. Olsen signerte dokumentet.",
+                },
+            ],
+        },
+        {
+            "group_id": "org_dnb",
+            "entity_type": "ORG",
+            "doc_ids": ["case_doc_5", "case_doc_6"],
+            "variants": [
+                {
+                    "text": "DNB ASA",
+                    "context": "DNB ASA behandlet betalingen.",
+                },
+                {
+                    "text": "DNB",
+                    "context": "DNB ble brukt som bankforbindelse.",
+                },
+            ],
+        },
+    ],
+    "hard_negatives": [
+        {
+            "group_id_a": "per_alice",
+            "group_id_b": "per_bob",
+        }
+    ],
+}
 UNIT_INTERVAL_COLUMNS = [
     "jaro_winkler_similarity",
     "levenshtein_ratio_similarity",
@@ -45,9 +99,14 @@ BINARY_COLUMNS = [
 
 @pytest.fixture()
 def synthetic_data_dir(tmp_path: Path) -> tuple[Path, str]:
-    """Build a synthetic dataset from the curated identity groups."""
+    """Build a synthetic dataset from a local test payload."""
     data_dir = tmp_path / "synthetic_data"
-    build_matching_dataset(IDENTITY_GROUPS_PATH, data_dir, max_pairs=2500, seed=7)
+    identity_groups_path = tmp_path / "identity_groups.json"
+    identity_groups_path.write_text(
+        json.dumps(_IDENTITY_GROUPS_PAYLOAD),
+        encoding="utf-8",
+    )
+    build_matching_dataset(identity_groups_path, data_dir, max_pairs=2500, seed=7)
     run_id = pl.read_parquet(data_dir / "entities.parquet").item(0, "run_id")
     return data_dir, run_id
 
