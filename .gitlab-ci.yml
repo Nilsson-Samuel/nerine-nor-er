@@ -15,10 +15,11 @@ default:
         - requirements-ci.txt
     paths:
       - .cache/pip
-  variables:
-    PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
-    PIP_DISABLE_PIP_VERSION_CHECK: "1"
-    PYTHONPATH: "$CI_PROJECT_DIR:$CI_PROJECT_DIR/src"
+
+variables:
+  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  PYTHONPATH: "$CI_PROJECT_DIR:$CI_PROJECT_DIR/src"
 
 unit_tests:
   stage: test
