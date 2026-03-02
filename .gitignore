@@ -22,6 +22,8 @@ models/*.lgb
 
 # HuggingFace cache
 .cache/huggingface/
+.cache/
+report.xml
 
 # OS
 .DS_Store

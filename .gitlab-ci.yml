@@ -24,6 +24,9 @@ variables:
 unit_tests:
   stage: test
   before_script:
+    - apt-get update
+    - apt-get install -y --no-install-recommends libgomp1
+    - rm -rf /var/lib/apt/lists/*
     - python -V
     - python -m pip install -r requirements-ci.txt
   script:

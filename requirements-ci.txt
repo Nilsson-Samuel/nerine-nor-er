@@ -5,3 +5,5 @@ pyarrow==22.0.0
 duckdb==1.4.4
 Metaphone==0.6
 RapidFuzz==3.14.3
+lightgbm==4.6.0
+scikit-learn==1.8.0
