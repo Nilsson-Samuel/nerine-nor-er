@@ -1,6 +1,6 @@
-"""Tests for S2.1 — file discovery, document registration, and docs.parquet output.
+"""Tests for file discovery, document registration, and docs.parquet output.
 
-Covers the validation gate criteria:
+Covers important (validation gate) criteria:
 - No duplicate doc_id for same run_id on re-run
 - No duplicate path for same run_id on re-run
 - doc_id is 32 hex chars

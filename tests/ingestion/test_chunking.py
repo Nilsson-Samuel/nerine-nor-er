@@ -1,6 +1,6 @@
 """Tests for chunking and full ingestion orchestration.
 
-Covers the validation gate criteria:
+Covers important (validation gate) criteria:
 - Chunk size and overlap follow configured values
 - Deterministic output across repeated runs on unchanged input
 - chunks.parquet required fields present and correctly typed

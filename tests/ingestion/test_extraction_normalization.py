@@ -1,6 +1,6 @@
-"""Tests for S2.2 — PDF/DOCX extraction, text normalization, and orchestrator.
+"""Tests for PDF/DOCX extraction, text normalization, and orchestrator.
 
-Covers the validation gate criteria:
+Covers important (validation gate) criteria:
 - PDF extraction produces correct page_num and source_unit_kind per page
 - DOCX extraction covers paragraphs and table cells with sequential indices
 - Norwegian characters (æøå) preserved after normalization
