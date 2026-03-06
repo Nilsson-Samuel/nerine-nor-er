@@ -219,6 +219,25 @@ class TestRegisterDocuments:
         errors = validate(table, DOCS_SCHEMA)
         assert errors == []
 
+    def test_changed_file_same_path_no_duplicate(
+        self, case_root: Path, con: duckdb.DuckDBPyConnection,
+    ):
+        """If a file's content changes but path stays the same, skip it."""
+        files = discover_documents(case_root)
+        run_id = "run1"
+
+        # First registration
+        table1 = register_documents(files, case_root, run_id, con)
+        con.execute("CREATE OR REPLACE TABLE docs AS SELECT * FROM table1")
+
+        # Change content of report.pdf (new doc_id, same path)
+        (case_root / "report.pdf").write_bytes(b"changed-pdf-content")
+
+        # Second registration — should skip the changed file
+        table2 = register_documents(files, case_root, run_id, con)
+        paths = table2.column("path").to_pylist()
+        assert "report.pdf" not in paths
+
 
 # ---------------------------------------------------------------------------
 # End-to-end orchestrator tests

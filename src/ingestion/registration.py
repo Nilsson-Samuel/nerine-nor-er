@@ -82,7 +82,7 @@ def register_documents(
     """
     extracted_at = datetime.now(timezone.utc)
 
-    existing_doc_ids = _get_existing_doc_ids(con, run_id)
+    existing_doc_ids, existing_paths = _get_existing_keys(con, run_id)
 
     rows = []
     skipped = 0
@@ -90,6 +90,13 @@ def register_documents(
         row = build_doc_row(fp, case_root, run_id, extracted_at)
         if row["doc_id"] in existing_doc_ids:
             logger.info("Skipping already-registered doc: %s", row["path"])
+            skipped += 1
+            continue
+        if row["path"] in existing_paths:
+            logger.warning(
+                "Skipping doc with existing path but new content: %s",
+                row["path"],
+            )
             skipped += 1
             continue
         rows.append(row)
@@ -113,15 +120,17 @@ def register_documents(
     return pa.table(arrays, schema=DOCS_SCHEMA)
 
 
-def _get_existing_doc_ids(
+def _get_existing_keys(
     con: duckdb.DuckDBPyConnection, run_id: str
-) -> set[str]:
-    """Query existing doc_ids for a given run_id from the docs table."""
+) -> tuple[set[str], set[str]]:
+    """Query existing doc_ids and paths for a given run_id from the docs table."""
     try:
         result = con.execute(
-            "SELECT doc_id FROM docs WHERE run_id = ?", [run_id]
+            "SELECT doc_id, path FROM docs WHERE run_id = ?", [run_id]
         ).fetchall()
-        return {row[0] for row in result}
+        doc_ids = {row[0] for row in result}
+        paths = {row[1] for row in result}
+        return doc_ids, paths
     except duckdb.CatalogException:
         # Table doesn't exist yet — no duplicates possible
-        return set()
+        return set(), set()
