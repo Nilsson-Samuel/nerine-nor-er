@@ -423,6 +423,23 @@ class TestRunIngestion:
         result = run_ingestion(case_root, data_dir)
         assert len(result) == 32
 
+    def test_rerun_same_run_id_no_duplicate_chunks(
+        self, case_root: Path, data_dir: Path,
+    ):
+        """Re-running with the same run_id must not duplicate chunk rows."""
+        run_ingestion(case_root, data_dir, run_id="rerun_test")
+        first = pq.read_table(data_dir / "chunks.parquet")
+        first_count = len(first)
+
+        run_ingestion(case_root, data_dir, run_id="rerun_test")
+        second = pq.read_table(data_dir / "chunks.parquet")
+
+        assert len(second) == first_count, (
+            f"Expected {first_count} chunks after rerun, got {len(second)}"
+        )
+        errors = validate_contract_rules(second, "chunks")
+        assert errors == []
+
     def test_existing_tests_still_work_discovery_registration(
         self, case_root: Path, data_dir: Path,
     ):

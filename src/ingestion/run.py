@@ -110,12 +110,40 @@ def _write_chunks_parquet(
     data_dir: Path,
     con: duckdb.DuckDBPyConnection,
 ) -> None:
-    """Write chunk rows to chunks.parquet (atomic temp+rename)."""
+    """Write chunk rows to chunks.parquet (atomic temp+rename).
+
+    Deduplicates against existing chunks: if a (run_id, doc_id) pair
+    already has chunks on disk, those doc's chunks are skipped to
+    prevent duplication on rerun.
+    """
     data_dir = Path(data_dir)
     chunks_path = data_dir / "chunks.parquet"
 
     if not chunks:
         logger.info("No chunks to write.")
+        return
+
+    # Filter out chunks for doc_ids already present in this run
+    if chunks_path.exists():
+        existing = pq.read_table(chunks_path)
+        existing_keys = set()
+        run_id_col = existing.column("run_id").to_pylist()
+        doc_id_col = existing.column("doc_id").to_pylist()
+        for r, d in zip(run_id_col, doc_id_col):
+            if r == run_id:
+                existing_keys.add(d)
+        if existing_keys:
+            before = len(chunks)
+            chunks = [c for c in chunks if c["doc_id"] not in existing_keys]
+            skipped = before - len(chunks)
+            if skipped:
+                logger.info(
+                    "Skipped %d chunks (doc already chunked in run %s)",
+                    skipped, run_id,
+                )
+
+    if not chunks:
+        logger.info("No new chunks to write after dedup.")
         return
 
     # Build columnar arrays in schema order
