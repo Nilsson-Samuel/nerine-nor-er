@@ -82,12 +82,22 @@ def chunk_document(
     chunk_texts = splitter.split_text(full_text)
 
     chunks = []
+    search_start = 0
     for chunk_index, chunk_text in enumerate(chunk_texts):
         if not chunk_text.strip():
             continue
 
-        # Find which unit this chunk starts in
-        chunk_start_pos = full_text.find(chunk_text)
+        # Find which unit this chunk starts in, searching forward from
+        # the last match to handle repeated text correctly.
+        chunk_start_pos = full_text.find(chunk_text, search_start)
+        if chunk_start_pos == -1:
+            # Overlap can cause a chunk to start before search_start;
+            # fall back to unrestricted search.
+            chunk_start_pos = full_text.find(chunk_text)
+        # Advance past most of this chunk (minus overlap) so the next
+        # search lands near where the next chunk actually begins.
+        search_start = chunk_start_pos + max(1, len(chunk_text) - CHUNK_OVERLAP)
+
         page_num, source_unit_kind = _locate_unit(
             chunk_start_pos, unit_starts, units
         )

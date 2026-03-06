@@ -211,6 +211,18 @@ class TestChunkDocument:
         assert 0 in page_nums
         assert 1 in page_nums
 
+    def test_repeated_text_gets_correct_page_num(self):
+        """Identical text on different pages must not all map to the first page."""
+        splitter = build_splitter()
+        repeated = "Politiet etterforsker saken. " * 30  # same text on both pages
+        units = [
+            {"page_num": 0, "text": repeated, "source_unit_kind": "pdf_page"},
+            {"page_num": 1, "text": repeated, "source_unit_kind": "pdf_page"},
+        ]
+        chunks = chunk_document("doc1", units, splitter)
+        page_nums = {c["page_num"] for c in chunks}
+        assert 1 in page_nums, "Chunks from page 1 were misattributed to page 0"
+
 
 # ---------------------------------------------------------------------------
 # Schema validation tests
