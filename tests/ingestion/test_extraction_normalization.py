@@ -232,9 +232,10 @@ class TestNormalizeText:
     def test_none_input(self):
         assert normalize_text(None) == ""
 
-    def test_tabs_removed_as_control_chars(self):
-        # \t is 0x09, falls in control-char range — stripped, not collapsed
-        assert normalize_text("hello\tworld") == "helloworld"
+    def test_tabs_converted_to_spaces(self):
+        # Tabs become spaces to preserve word boundaries, then collapse
+        assert normalize_text("hello\tworld") == "hello world"
+        assert normalize_text("a\t\tb") == "a b"
 
     def test_nfc_normalization(self):
         import unicodedata

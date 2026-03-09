@@ -27,6 +27,7 @@ def normalize_text(text: str) -> str:
     """
     text = ftfy.fix_text(text or "")
     text = unicodedata.normalize("NFC", text)
+    text = text.replace("\t", " ")  # Preserve word boundaries before ctrl strip
     text = _CTRL_EXCEPT_NL.sub("", text)
     text = _MULTISPACE.sub(" ", text)
     return text.strip()
