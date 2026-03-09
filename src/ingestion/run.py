@@ -20,7 +20,7 @@ from src.ingestion.chunking import build_splitter, chunk_document
 from src.ingestion.discovery import discover_documents
 from src.ingestion.extraction import extract_docx_units, extract_pdf_units
 from src.ingestion.normalization import normalize_text
-from src.ingestion.registration import register_documents
+from src.ingestion.registration import compute_doc_id, register_documents
 from src.shared.schemas import CHUNKS_SCHEMA, DOCS_SCHEMA
 
 logger = logging.getLogger(__name__)
@@ -343,6 +343,17 @@ def run_extraction_and_normalization(
             logger.warning("file_not_found: %s", rel_path)
             result[doc_id] = []
             page_counts[doc_id] = 0
+            continue
+
+        # Verify file content still matches the registered doc_id
+        current_hash = compute_doc_id(abs_path)
+        if current_hash != doc_id:
+            _warn(warnings, "content_changed_since_registration")
+            logger.warning(
+                "content_changed_since_registration: %s "
+                "(registered=%s, current=%s) — skipping extraction",
+                rel_path, doc_id, current_hash,
+            )
             continue
 
         # Extract raw text units

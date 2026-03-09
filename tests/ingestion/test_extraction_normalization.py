@@ -337,3 +337,58 @@ class TestRunExtractionAndNormalization:
             case_with_real_files, data_dir, "nonexistent_run"
         )
         assert result == {}
+
+    def test_changed_file_skips_extraction_preserves_provenance(
+        self, tmp_path: Path, data_dir: Path
+    ):
+        """Rerun after in-place file change must not corrupt the docs row.
+
+        Scenario from code review: ingest a 1-page PDF with run_id=R,
+        replace the file with a 3-page PDF, rerun with run_id=R.
+        The docs row must keep page_count=1 (from the original extraction),
+        and the changed file must be skipped entirely.
+        """
+        case_root = tmp_path / "case"
+        case_root.mkdir()
+        run_id = "same_run"
+
+        # Create a 1-page PDF and run full discovery+registration+extraction
+        pdf_path = case_root / "report.pdf"
+        doc1 = fitz.open()
+        p = doc1.new_page()
+        p.insert_text((50, 72), "Original single page.")
+        doc1.save(str(pdf_path))
+        doc1.close()
+
+        run_discovery_and_registration(case_root, data_dir, run_id=run_id)
+        result1 = run_extraction_and_normalization(
+            case_root, data_dir, run_id
+        )
+        assert len(result1) == 1
+        original_doc_id = list(result1.keys())[0]
+
+        # Verify page_count is 1 after first extraction
+        table1 = pq.read_table(data_dir / "docs.parquet")
+        row1 = table1.to_pylist()[0]
+        assert row1["page_count"] == 1
+        assert row1["doc_id"] == original_doc_id
+
+        # Replace the file with a 3-page PDF (different content)
+        doc2 = fitz.open()
+        for i in range(3):
+            pg = doc2.new_page()
+            pg.insert_text((50, 72), f"Replacement page {i + 1}.")
+        doc2.save(str(pdf_path))
+        doc2.close()
+
+        # Rerun extraction with same run_id — changed file must be skipped
+        result2 = run_extraction_and_normalization(
+            case_root, data_dir, run_id
+        )
+        assert original_doc_id not in result2
+
+        # docs.parquet must still show the original page_count
+        table2 = pq.read_table(data_dir / "docs.parquet")
+        row2 = table2.to_pylist()[0]
+        assert row2["doc_id"] == original_doc_id
+        assert row2["page_count"] == 1  # NOT 3
