@@ -25,17 +25,16 @@ def extract_pdf_units(path: Path) -> list[dict]:
         Empty pages produce units with empty text (warned, not skipped).
     """
     units = []
-    doc = fitz.open(path)
-    for page_num, page in enumerate(doc):
-        text = page.get_text() or ""
-        if not text.strip():
-            logger.warning("empty_pdf_page: %s page %d", path.name, page_num)
-        units.append({
-            "page_num": page_num,
-            "text": text,
-            "source_unit_kind": "pdf_page",
-        })
-    doc.close()
+    with fitz.open(path) as doc:
+        for page_num, page in enumerate(doc):
+            text = page.get_text() or ""
+            if not text.strip():
+                logger.warning("empty_pdf_page: %s page %d", path.name, page_num)
+            units.append({
+                "page_num": page_num,
+                "text": text,
+                "source_unit_kind": "pdf_page",
+            })
     return units
 
 
