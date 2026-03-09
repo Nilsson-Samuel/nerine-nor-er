@@ -1,14 +1,16 @@
-"""Baseline LightGBM training and validation helpers for pair matching."""
+"""Baseline LightGBM training, persistence, and inference helpers for pair matching."""
 
 from __future__ import annotations
 
 import logging
+from pathlib import Path
+import json
 from collections.abc import Mapping
 from typing import Any
 
 import numpy as np
 import polars as pl
-from lightgbm import LGBMClassifier
+from lightgbm import Booster, LGBMClassifier
 from sklearn.metrics import average_precision_score, fbeta_score, precision_score, recall_score
 
 
@@ -17,6 +19,9 @@ logger = logging.getLogger(__name__)
 DEFAULT_LIGHTGBM_SEED = 7
 DEFAULT_MATCH_F_BETA = 0.5
 DEFAULT_MATCH_THRESHOLD = 0.5
+DEFAULT_MODEL_VERSION = "lightgbm_baseline"
+MODEL_FILENAME = "reranker_model.txt"
+MODEL_METADATA_FILENAME = "reranker_model_metadata.json"
 BASELINE_LIGHTGBM_PARAMS = {
     "objective": "binary",
     "boosting_type": "gbdt",
@@ -78,6 +83,11 @@ def _build_lightgbm_params(params: Mapping[str, Any] | None) -> dict[str, Any]:
     return merged
 
 
+def _booster_from_model(model: LGBMClassifier | Booster) -> Booster:
+    """Return a LightGBM booster from either supported model wrapper."""
+    return model.booster_ if isinstance(model, LGBMClassifier) else model
+
+
 def train_lightgbm(
     X_train: pl.DataFrame | np.ndarray,
     y_train: pl.Series | np.ndarray,
@@ -99,6 +109,60 @@ def train_lightgbm(
     model = LGBMClassifier(**_build_lightgbm_params(params))
     model.fit(matrix, labels, feature_name=feature_names)
     return model
+
+
+def save_lightgbm_artifacts(
+    model: LGBMClassifier | Booster,
+    out_dir: Path | str,
+    model_version: str = DEFAULT_MODEL_VERSION,
+) -> dict[str, Any]:
+    """Persist a trained LightGBM model and minimal inference metadata."""
+    if not isinstance(model_version, str) or not model_version.strip():
+        raise ValueError("model_version must be a non-empty string")
+
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    booster = _booster_from_model(model)
+    booster.save_model(str(out_dir / MODEL_FILENAME))
+
+    metadata = {
+        "model_version": model_version.strip(),
+        "feature_names": list(booster.feature_name()),
+    }
+    (out_dir / MODEL_METADATA_FILENAME).write_text(
+        json.dumps(metadata, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+    return metadata
+
+
+def load_lightgbm_artifacts(model_dir: Path | str) -> tuple[Booster, dict[str, Any]]:
+    """Load a persisted LightGBM booster and its inference metadata."""
+    model_dir = Path(model_dir)
+    booster = Booster(model_file=str(model_dir / MODEL_FILENAME))
+    metadata = json.loads((model_dir / MODEL_METADATA_FILENAME).read_text(encoding="utf-8"))
+    return booster, metadata
+
+
+def score_lightgbm(
+    model: LGBMClassifier | Booster,
+    X: pl.DataFrame | np.ndarray,
+) -> np.ndarray:
+    """Score a feature matrix and return probabilities clipped to [0, 1]."""
+    matrix, feature_names = _coerce_feature_matrix(X, "X_score")
+    booster = _booster_from_model(model)
+    expected_feature_names = list(booster.feature_name())
+    if feature_names is not None and expected_feature_names and feature_names != expected_feature_names:
+        raise ValueError("X_score columns must match trained LightGBM feature order")
+
+    probabilities = np.asarray(booster.predict(matrix), dtype=np.float64)
+    if probabilities.ndim != 1:
+        raise RuntimeError("inference probabilities must be a 1D array")
+    if not np.isfinite(probabilities).all():
+        raise RuntimeError("inference probabilities must be finite")
+
+    return np.clip(probabilities, 0.0, 1.0).astype(np.float32, copy=False)
 
 
 def evaluate_lightgbm(
@@ -128,10 +192,7 @@ def evaluate_lightgbm(
     matrix, _ = _coerce_feature_matrix(X_val, "X_val")
     labels = _coerce_binary_labels(y_val, "y_val")
 
-    probabilities = np.asarray(model.booster_.predict(matrix), dtype=np.float64)
-    if not np.isfinite(probabilities).all():
-        raise RuntimeError("validation probabilities must be finite")
-
+    probabilities = score_lightgbm(model, matrix).astype(np.float64, copy=False)
     predictions = (probabilities >= threshold).astype(np.int8)
     metrics = {
         "precision": float(precision_score(labels, predictions, zero_division=0)),

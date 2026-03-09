@@ -5,6 +5,11 @@ Use `validate()` for schema shape/type checks and `validate_contract_rules()`
 for strict value-level contract checks.
 """
 
+from __future__ import annotations
+
+import math
+
+import polars as pl
 import pyarrow as pa
 
 
@@ -38,6 +43,24 @@ CANDIDATE_PAIRS_SCHEMA = pa.schema([
     ("blocking_methods", pa.list_(pa.string())),  # Distinct sorted methods
     ("blocking_source", pa.string()),  # "multi" for 2+ methods, else sole method
     ("blocking_method_count", pa.int8()),  # Int8 count of methods (1..3)
+])
+
+SHAP_VALUE_SCHEMA = pa.struct([
+    ("feature", pa.string()),
+    ("value", pa.float32()),
+])
+
+SCORED_PAIRS_SCHEMA = pa.schema([
+    ("run_id", pa.string()),
+    ("entity_id_a", pa.string()),
+    ("entity_id_b", pa.string()),
+    ("score", pa.float32()),
+    ("model_version", pa.string()),
+    ("scored_at", pa.timestamp("us", tz="UTC")),
+    ("blocking_methods", pa.list_(pa.string())),
+    ("blocking_source", pa.string()),
+    ("blocking_method_count", pa.int8()),
+    ("shap_top5", pa.list_(SHAP_VALUE_SCHEMA)),
 ])
 
 # Expected keys in handoff_manifest.json
@@ -83,7 +106,11 @@ def validate(table: pa.Table, schema: pa.Schema) -> list[str]:
 
 
 # Enforce invariant rules after schema/type validation succeeds.
-def validate_contract_rules(table: pa.Table, contract_name: str) -> list[str]:
+def validate_contract_rules(
+    table: pa.Table,
+    contract_name: str,
+    candidate_pairs_table: pa.Table | None = None,
+) -> list[str]:
     """Validate strict value-level contract rules for a known table contract.
 
     Args:
@@ -108,6 +135,12 @@ def validate_contract_rules(table: pa.Table, contract_name: str) -> list[str]:
         if schema_errors:
             return schema_errors
         return _validate_candidate_pair_rules(table)
+
+    if contract_name in {"scored_pairs", "scored_pairs.parquet"}:
+        schema_errors = validate(table, SCORED_PAIRS_SCHEMA)
+        if schema_errors:
+            return schema_errors
+        return _validate_scored_pair_rules(table, candidate_pairs_table)
 
     raise ValueError(f"unsupported contract_name: {contract_name}")
 
@@ -249,6 +282,294 @@ def _validate_candidate_pair_rules(table: pa.Table) -> list[str]:
     return errors
 
 
+def _validate_scored_pair_rules(
+    table: pa.Table,
+    candidate_pairs_table: pa.Table | None,
+) -> list[str]:
+    errors: list[str] = []
+    frame = _prepare_scored_pairs_frame(table)
+
+    _extend_row_errors(
+        errors,
+        _row_indices_where(
+            frame,
+            pl.col("run_id").is_null()
+            | (pl.col("run_id").str.len_chars() == 0).fill_null(True)
+            | (pl.col("run_id") != pl.col("run_id").str.strip_chars()).fill_null(True)
+            | (pl.col("run_id") != pl.col("run_id").str.to_lowercase()).fill_null(True),
+        ),
+        "run_id must be lowercase, trimmed, non-empty",
+    )
+    _extend_row_errors(
+        errors,
+        _row_indices_where(
+            frame,
+            pl.col("entity_id_a").is_null()
+            | (~pl.col("entity_id_a").str.contains(r"^[0-9a-f]{32}$")).fill_null(True),
+        ),
+        "entity_id_a must be 32-char lowercase hex",
+    )
+    _extend_row_errors(
+        errors,
+        _row_indices_where(
+            frame,
+            pl.col("entity_id_b").is_null()
+            | (~pl.col("entity_id_b").str.contains(r"^[0-9a-f]{32}$")).fill_null(True),
+        ),
+        "entity_id_b must be 32-char lowercase hex",
+    )
+    _extend_row_errors(
+        errors,
+        _row_indices_where(
+            frame,
+            (pl.col("entity_id_a") == pl.col("entity_id_b")).fill_null(False),
+        ),
+        "pair cannot be a self-pair",
+    )
+    _extend_row_errors(
+        errors,
+        _row_indices_where(
+            frame,
+            (pl.col("entity_id_a") > pl.col("entity_id_b")).fill_null(False),
+        ),
+        "entity_id_a must be < entity_id_b",
+    )
+    _extend_row_errors(
+        errors,
+        _row_indices_where(
+            frame,
+            pl.col("score").is_null()
+            | (~pl.col("score").is_finite()).fill_null(True)
+            | (~pl.col("score").is_between(0.0, 1.0, closed="both")).fill_null(True),
+        ),
+        "score must be finite and in [0, 1]",
+    )
+    _extend_row_errors(
+        errors,
+        _row_indices_where(
+            frame,
+            pl.col("model_version").is_null()
+            | (pl.col("model_version").str.len_chars() == 0).fill_null(True),
+        ),
+        "model_version must be non-empty",
+    )
+    _extend_row_errors(
+        errors,
+        _row_indices_where(frame, pl.col("scored_at").is_null()),
+        "scored_at must be a UTC timestamp",
+    )
+    _extend_row_errors(
+        errors,
+        _row_indices_where(
+            frame,
+            pl.col("blocking_methods").is_null() | (pl.col("__blocking_methods_len") == 0),
+        ),
+        "blocking_methods must be a non-empty list",
+    )
+    _extend_row_errors(
+        errors,
+        _row_indices_where(
+            frame,
+            (pl.col("__blocking_methods_len") > 0)
+            & (pl.col("blocking_methods") != pl.col("__blocking_methods_sorted_distinct")).fill_null(
+                False
+            ),
+        ),
+        "blocking_methods must be sorted and distinct",
+    )
+    _extend_row_errors(
+        errors,
+        _row_indices_where(
+            frame,
+            (pl.col("__blocking_methods_len") > 0)
+            & (~pl.col("__blocking_methods_known").fill_null(False)),
+        ),
+        "blocking_methods contain unsupported values",
+    )
+    _extend_row_errors(
+        errors,
+        _row_indices_where(
+            frame,
+            ~pl.col("blocking_source").is_in(sorted(VALID_BLOCKING_SOURCES)).fill_null(False),
+        ),
+        f"blocking_source must be one of {sorted(VALID_BLOCKING_SOURCES)}",
+    )
+    _extend_row_errors(
+        errors,
+        _row_indices_where(
+            frame,
+            pl.col("blocking_method_count").is_null()
+            | (~pl.col("blocking_method_count").is_between(1, 3, closed="both")).fill_null(True),
+        ),
+        "blocking_method_count must be in 1..3",
+    )
+    _extend_row_errors(
+        errors,
+        _row_indices_where(
+            frame,
+            pl.col("blocking_method_count").is_between(1, 3, closed="both").fill_null(False)
+            & (pl.col("blocking_method_count") != pl.col("__blocking_methods_len")).fill_null(False),
+        ),
+        "blocking_method_count must equal len(blocking_methods)",
+    )
+    _extend_row_errors(
+        errors,
+        _row_indices_where(
+            frame,
+            (pl.col("blocking_method_count") > 1).fill_null(False)
+            & (pl.col("blocking_source") != "multi").fill_null(False),
+        ),
+        "blocking_source must be 'multi' when count > 1",
+    )
+    _extend_row_errors(
+        errors,
+        _row_indices_where(
+            frame,
+            (pl.col("blocking_method_count") == 1).fill_null(False)
+            & (pl.col("blocking_source") != pl.col("__blocking_method_sole")).fill_null(False),
+        ),
+        "blocking_source must equal sole blocking method",
+    )
+    _extend_row_errors(
+        errors,
+        _duplicate_key_row_indices(frame),
+        "duplicate (run_id, entity_id_a, entity_id_b) key",
+    )
+    _extend_row_errors(
+        errors,
+        _row_indices_with_missing_candidate_keys(frame, candidate_pairs_table),
+        "pair must reference candidate_pairs for the same run",
+    )
+    _extend_row_errors(
+        errors,
+        _candidate_row_indices_missing_scored_keys(frame, candidate_pairs_table),
+        "candidate_pairs row is missing from scored_pairs",
+    )
+
+    for row_index, shap_top5 in zip(
+        frame["__row_index"].to_list(),
+        table.column("shap_top5").to_pylist(),
+        strict=True,
+    ):
+        errors.extend(_validate_shap_top5(row_index, shap_top5))
+
+    return errors
+
+
+def _prepare_scored_pairs_frame(table: pa.Table) -> pl.DataFrame:
+    """Build a scored-pairs frame with derived validation columns."""
+    return pl.from_arrow(table).with_row_index("__row_index", offset=1).with_columns(
+        pl.col("blocking_methods").list.len().alias("__blocking_methods_len"),
+        pl.col("blocking_methods").list.unique().list.sort().alias(
+            "__blocking_methods_sorted_distinct"
+        ),
+        pl.col("blocking_methods")
+        .list.eval(pl.element().is_in(sorted(VALID_BLOCKING_METHODS)))
+        .list.all()
+        .alias("__blocking_methods_known"),
+        pl.col("blocking_methods").list.get(0).alias("__blocking_method_sole"),
+    )
+
+
+def _row_indices_where(frame: pl.DataFrame, invalid_expr: pl.Expr) -> list[int]:
+    """Return 1-based row indices matching a validation error expression."""
+    return frame.filter(invalid_expr).get_column("__row_index").to_list()
+
+
+def _extend_row_errors(errors: list[str], row_indices: list[int], message: str) -> None:
+    """Append one error per failing row index."""
+    errors.extend(f"row {row_index}: {message}" for row_index in row_indices)
+
+
+def _duplicate_key_row_indices(frame: pl.DataFrame) -> list[int]:
+    """Return row indices for duplicate scored-pair keys."""
+    key_columns = ["run_id", "entity_id_a", "entity_id_b"]
+    duplicate_keys = frame.group_by(key_columns).len().filter(pl.col("len") > 1).select(key_columns)
+    if duplicate_keys.is_empty():
+        return []
+    return (
+        frame.join(duplicate_keys, on=key_columns, how="inner")
+        .sort("__row_index")
+        .get_column("__row_index")
+        .to_list()
+    )
+
+
+def _row_indices_with_missing_candidate_keys(
+    frame: pl.DataFrame,
+    candidate_pairs_table: pa.Table | None,
+) -> list[int]:
+    """Return scored row indices whose keys are absent from candidate_pairs."""
+    if candidate_pairs_table is None:
+        return []
+
+    key_columns = ["run_id", "entity_id_a", "entity_id_b"]
+    candidate_keys = pl.from_arrow(candidate_pairs_table).select(key_columns).unique()
+    return (
+        frame.join(candidate_keys, on=key_columns, how="anti")
+        .sort("__row_index")
+        .get_column("__row_index")
+        .to_list()
+    )
+
+
+def _candidate_row_indices_missing_scored_keys(
+    frame: pl.DataFrame,
+    candidate_pairs_table: pa.Table | None,
+) -> list[int]:
+    """Return candidate row indices that are missing from scored_pairs."""
+    if candidate_pairs_table is None:
+        return []
+
+    key_columns = ["run_id", "entity_id_a", "entity_id_b"]
+    candidate_frame = pl.from_arrow(candidate_pairs_table).with_row_index(
+        "__candidate_row_index",
+        offset=1,
+    )
+    scored_keys = frame.select(key_columns).unique()
+    return (
+        candidate_frame.join(scored_keys, on=key_columns, how="anti")
+        .sort("__candidate_row_index")
+        .get_column("__candidate_row_index")
+        .to_list()
+    )
+
+
+def _validate_shap_top5(row_index: int, shap_top5: object) -> list[str]:
+    errors: list[str] = []
+    if not isinstance(shap_top5, list):
+        return [f"row {row_index}: shap_top5 must be a list"]
+    if len(shap_top5) > 5:
+        errors.append(f"row {row_index}: shap_top5 must have length <= 5")
+
+    seen_features: set[str] = set()
+    previous_abs_value: float | None = None
+    for entry in shap_top5:
+        if not isinstance(entry, dict):
+            errors.append(f"row {row_index}: shap_top5 entries must be structs")
+            continue
+        feature = entry.get("feature")
+        value = entry.get("value")
+        if not _is_non_empty_string(feature):
+            errors.append(f"row {row_index}: shap_top5 feature must be non-empty")
+            continue
+        if feature in seen_features:
+            errors.append(f"row {row_index}: shap_top5 feature names must be unique")
+        seen_features.add(feature)
+
+        if not _is_finite_number(value):
+            errors.append(f"row {row_index}: shap_top5 values must be finite")
+            continue
+        abs_value = abs(float(value))
+        if previous_abs_value is not None and abs_value > previous_abs_value:
+            errors.append(
+                f"row {row_index}: shap_top5 must be ordered by absolute value descending"
+            )
+        previous_abs_value = abs_value
+
+    return errors
+
+
 def _is_non_empty_string(value: object) -> bool:
     return isinstance(value, str) and value != ""
 
@@ -269,3 +590,7 @@ def _is_hex32(value: object) -> bool:
         and len(value) == 32
         and all(c in _HEX32_CHARS for c in value)
     )
+
+
+def _is_finite_number(value: object) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)

@@ -1,6 +1,7 @@
 """Matching feature-stage orchestration and artifact writing."""
 
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
 
 import polars as pl
@@ -17,7 +18,9 @@ from src.matching.features import (
     load_embedding_artifacts,
     load_pairs_with_metadata,
 )
-from src.matching.writer import write_features
+from src.matching.reranker import load_lightgbm_artifacts, score_lightgbm
+from src.matching.writer import build_scored_pairs_table, write_features, write_scored_pairs
+from src.shared import schemas
 
 
 logger = logging.getLogger(__name__)
@@ -30,6 +33,18 @@ FEATURE_COLUMNS = [
     *COOCCURRENCE_META_FEATURE_COLUMNS,
 ]
 FEATURE_OUTPUT_COLUMNS = [*PAIR_KEY_COLUMNS, *FEATURE_COLUMNS]
+SCORED_OUTPUT_COLUMNS = [
+    "run_id",
+    "entity_id_a",
+    "entity_id_b",
+    "score",
+    "model_version",
+    "scored_at",
+    "blocking_methods",
+    "blocking_source",
+    "blocking_method_count",
+    "shap_top5",
+]
 
 
 def _feature_diagnostic_values(
@@ -128,3 +143,56 @@ def run_features(data_dir: Path | str, run_id: str) -> pl.DataFrame:
 
     write_features(features_df, data_dir)
     return features_df
+
+
+def _load_feature_rows(data_dir: Path, run_id: str) -> pl.DataFrame:
+    """Load one run from features.parquet, building it first when absent."""
+    features_path = data_dir / "features.parquet"
+    if features_path.exists():
+        features_df = pl.read_parquet(features_path).filter(pl.col("run_id") == run_id)
+        if not features_df.is_empty():
+            return features_df
+    return run_features(data_dir, run_id)
+
+
+def _load_candidate_pairs_for_scoring(data_dir: Path, run_id: str) -> pl.DataFrame:
+    """Load candidate pairs needed for scored output in stable pair order."""
+    return (
+        pl.read_parquet(data_dir / "candidate_pairs.parquet")
+        .filter(pl.col("run_id") == run_id)
+        .sort(["entity_id_a", "entity_id_b"])
+    )
+
+
+def run_scoring(
+    data_dir: Path | str,
+    run_id: str,
+    scored_at: datetime | None = None,
+) -> pl.DataFrame:
+    """Run inference scoring and write scored_pairs.parquet for one run."""
+    data_dir = Path(data_dir)
+    features_df = _load_feature_rows(data_dir, run_id)
+    candidate_pairs_df = _load_candidate_pairs_for_scoring(data_dir, run_id)
+
+    _ensure_row_alignment(candidate_pairs_df, features_df, "features")
+    _ensure_key_alignment(candidate_pairs_df, features_df, "features")
+
+    booster, metadata = load_lightgbm_artifacts(data_dir)
+    scores = score_lightgbm(booster, features_df.select(FEATURE_COLUMNS)).tolist()
+    table = build_scored_pairs_table(
+        candidate_pairs_df=candidate_pairs_df,
+        scores=scores,
+        model_version=str(metadata["model_version"]),
+        scored_at=scored_at or datetime.now(timezone.utc),
+    )
+
+    validation_errors = schemas.validate_contract_rules(
+        table,
+        "scored_pairs",
+        candidate_pairs_table=candidate_pairs_df.to_arrow(),
+    )
+    if validation_errors:
+        raise ValueError("; ".join(validation_errors))
+
+    write_scored_pairs(table, data_dir)
+    return pl.from_arrow(table).select(SCORED_OUTPUT_COLUMNS)
