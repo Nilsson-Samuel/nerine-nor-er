@@ -3,6 +3,7 @@
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 import polars as pl
 
@@ -19,7 +20,14 @@ from src.matching.features import (
     load_pairs_with_metadata,
 )
 from src.matching.reranker import load_lightgbm_artifacts, score_lightgbm
-from src.matching.writer import build_scored_pairs_table, write_features, write_scored_pairs
+from src.matching.shap_explain import explain_lightgbm_top5
+from src.matching.tuning import build_tuning_summary, run_optuna_study
+from src.matching.writer import (
+    build_scored_pairs_table,
+    write_features,
+    write_scored_pairs,
+    write_scoring_metadata,
+)
 from src.shared import schemas
 
 
@@ -164,26 +172,127 @@ def _load_candidate_pairs_for_scoring(data_dir: Path, run_id: str) -> pl.DataFra
     )
 
 
+def _load_labeled_feature_matrix_if_available(
+    data_dir: Path,
+    run_id: str,
+) -> tuple[pl.DataFrame, pl.Series] | None:
+    """Load labeled features only when the requested run has labels available."""
+    labels_path = data_dir / "labels.parquet"
+    if not labels_path.exists():
+        return None
+    labels_for_run = pl.read_parquet(labels_path).filter(pl.col("run_id") == run_id)
+    if labels_for_run.is_empty():
+        return None
+
+    from src.synthetic.build_matching_dataset import load_labeled_feature_matrix
+
+    return load_labeled_feature_matrix(data_dir, run_id)
+
+
+def _run_tuning_if_requested(
+    data_dir: Path,
+    run_id: str,
+    *,
+    enable_tuning: bool,
+    tuning_mode: str,
+    tuning_trials: int,
+) -> dict[str, Any]:
+    """Run tuning when labels are available, else return a metadata-only status."""
+    if not enable_tuning:
+        return build_tuning_summary(
+            enabled=False,
+            status="disabled",
+            mode="disabled",
+            n_trials_requested=0,
+        )
+
+    labeled = _load_labeled_feature_matrix_if_available(data_dir, run_id)
+    if labeled is None:
+        return build_tuning_summary(
+            enabled=True,
+            status="skipped_no_labels",
+            mode=tuning_mode,
+            n_trials_requested=tuning_trials,
+        )
+
+    X_labeled, y_labeled = labeled
+    return run_optuna_study(
+        X_labeled,
+        y_labeled,
+        enabled=True,
+        mode=tuning_mode,
+        n_trials=tuning_trials,
+        out_dir=data_dir,
+    )
+
+
+def _build_scoring_metadata(
+    *,
+    run_id: str,
+    scored_at: datetime,
+    model_metadata: dict[str, Any],
+    row_count: int,
+    tuning_summary: dict[str, Any],
+    enable_shap: bool,
+    explained_row_count: int,
+) -> dict[str, Any]:
+    """Build one JSON metadata payload for scoring-side optional hooks."""
+    return {
+        "run_id": run_id,
+        "scored_at": scored_at.isoformat(),
+        "model_version": str(model_metadata["model_version"]),
+        "params_used": str(model_metadata.get("training_param_source", "baseline")),
+        "tuning": tuning_summary,
+        "shap": {
+            "enabled": enable_shap,
+            "generated": explained_row_count > 0,
+            "explained_row_count": explained_row_count,
+            "row_count": row_count,
+        },
+    }
+
+
 def run_scoring(
     data_dir: Path | str,
     run_id: str,
     scored_at: datetime | None = None,
+    *,
+    enable_tuning: bool = False,
+    tuning_mode: str = "smoke",
+    tuning_trials: int = 2,
+    enable_shap: bool = False,
+    shap_max_rows: int | None = None,
 ) -> pl.DataFrame:
     """Run inference scoring and write scored_pairs.parquet for one run."""
     data_dir = Path(data_dir)
     features_df = _load_feature_rows(data_dir, run_id)
     candidate_pairs_df = _load_candidate_pairs_for_scoring(data_dir, run_id)
+    effective_scored_at = scored_at or datetime.now(timezone.utc)
 
     _ensure_row_alignment(candidate_pairs_df, features_df, "features")
     _ensure_key_alignment(candidate_pairs_df, features_df, "features")
 
+    tuning_summary = _run_tuning_if_requested(
+        data_dir,
+        run_id,
+        enable_tuning=enable_tuning,
+        tuning_mode=tuning_mode,
+        tuning_trials=tuning_trials,
+    )
     booster, metadata = load_lightgbm_artifacts(data_dir)
     scores = score_lightgbm(booster, features_df.select(FEATURE_COLUMNS)).tolist()
+    shap_top5 = explain_lightgbm_top5(
+        booster,
+        features_df.select(FEATURE_COLUMNS),
+        enabled=enable_shap,
+        max_rows=shap_max_rows,
+    )
     table = build_scored_pairs_table(
         candidate_pairs_df=candidate_pairs_df,
         scores=scores,
         model_version=str(metadata["model_version"]),
-        scored_at=scored_at or datetime.now(timezone.utc),
+        scored_at=effective_scored_at,
+        shap_top5=shap_top5,
     )
 
     validation_errors = schemas.validate_contract_rules(
@@ -195,4 +304,22 @@ def run_scoring(
         raise ValueError("; ".join(validation_errors))
 
     write_scored_pairs(table, data_dir)
+    explained_row_count = 0
+    if enable_shap:
+        explained_row_count = candidate_pairs_df.height if shap_max_rows is None else min(
+            candidate_pairs_df.height,
+            shap_max_rows,
+        )
+    write_scoring_metadata(
+        _build_scoring_metadata(
+            run_id=run_id,
+            scored_at=effective_scored_at,
+            model_metadata=metadata,
+            row_count=candidate_pairs_df.height,
+            tuning_summary=tuning_summary,
+            enable_shap=enable_shap,
+            explained_row_count=explained_row_count,
+        ),
+        data_dir,
+    )
     return pl.from_arrow(table).select(SCORED_OUTPUT_COLUMNS)

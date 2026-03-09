@@ -88,6 +88,13 @@ def _booster_from_model(model: LGBMClassifier | Booster) -> Booster:
     return model.booster_ if isinstance(model, LGBMClassifier) else model
 
 
+def _jsonable_param_value(value: Any) -> Any:
+    """Convert numpy-backed parameter values into JSON-safe primitives."""
+    if isinstance(value, np.generic):
+        return value.item()
+    return value
+
+
 def train_lightgbm(
     X_train: pl.DataFrame | np.ndarray,
     y_train: pl.Series | np.ndarray,
@@ -115,10 +122,14 @@ def save_lightgbm_artifacts(
     model: LGBMClassifier | Booster,
     out_dir: Path | str,
     model_version: str = DEFAULT_MODEL_VERSION,
+    training_params: Mapping[str, Any] | None = None,
+    training_param_source: str = "baseline",
 ) -> dict[str, Any]:
     """Persist a trained LightGBM model and minimal inference metadata."""
     if not isinstance(model_version, str) or not model_version.strip():
         raise ValueError("model_version must be a non-empty string")
+    if not isinstance(training_param_source, str) or not training_param_source.strip():
+        raise ValueError("training_param_source must be a non-empty string")
 
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -126,9 +137,15 @@ def save_lightgbm_artifacts(
     booster = _booster_from_model(model)
     booster.save_model(str(out_dir / MODEL_FILENAME))
 
+    params_used = {
+        key: _jsonable_param_value(value)
+        for key, value in _build_lightgbm_params(training_params).items()
+    }
     metadata = {
         "model_version": model_version.strip(),
         "feature_names": list(booster.feature_name()),
+        "training_param_source": training_param_source.strip(),
+        "training_params": params_used,
     }
     (out_dir / MODEL_METADATA_FILENAME).write_text(
         json.dumps(metadata, indent=2, sort_keys=True),

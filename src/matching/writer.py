@@ -1,13 +1,19 @@
 """Parquet writers for intermediate matching artifacts."""
 
+import json
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 import polars as pl
 import pyarrow as pa
 import pyarrow.parquet as pq
 
 from src.shared.schemas import SCORED_PAIRS_SCHEMA
+
+
+SCORING_METADATA_FILENAME = "matching_scoring_metadata.json"
 
 
 def write_string_features(df: pl.DataFrame, out_dir: Path) -> None:
@@ -47,6 +53,7 @@ def build_scored_pairs_table(
     scores: list[float],
     model_version: str,
     scored_at: datetime,
+    shap_top5: list[list[dict[str, float]]] | None = None,
 ) -> pa.Table:
     """Build a strict-schema scored pair table from candidates and scores."""
     if candidate_pairs_df.height != len(scores):
@@ -56,7 +63,10 @@ def build_scored_pairs_table(
 
     scored_at = _coerce_scored_at(scored_at)
     row_count = candidate_pairs_df.height
-    shap_placeholder = [[] for _ in range(row_count)]
+    if shap_top5 is None:
+        shap_top5 = [[] for _ in range(row_count)]
+    if row_count != len(shap_top5):
+        raise ValueError("shap_top5 rows must align one-to-one with candidate pairs")
 
     return pa.Table.from_arrays(
         [
@@ -69,7 +79,7 @@ def build_scored_pairs_table(
             pa.array(candidate_pairs_df["blocking_methods"].to_list(), type=pa.list_(pa.string())),
             pa.array(candidate_pairs_df["blocking_source"].to_list(), type=pa.string()),
             pa.array(candidate_pairs_df["blocking_method_count"].to_list(), type=pa.int8()),
-            pa.array(shap_placeholder, type=SCORED_PAIRS_SCHEMA.field("shap_top5").type),
+            pa.array(shap_top5, type=SCORED_PAIRS_SCHEMA.field("shap_top5").type),
         ],
         schema=SCORED_PAIRS_SCHEMA,
     )
@@ -80,3 +90,13 @@ def write_scored_pairs(table: pa.Table, out_dir: Path) -> None:
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     pq.write_table(table, out_dir / "scored_pairs.parquet")
+
+
+def write_scoring_metadata(metadata: Mapping[str, Any], out_dir: Path) -> None:
+    """Write matching scoring metadata as formatted JSON."""
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / SCORING_METADATA_FILENAME).write_text(
+        json.dumps(dict(metadata), indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
