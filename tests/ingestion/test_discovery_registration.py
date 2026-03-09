@@ -238,6 +238,32 @@ class TestRegisterDocuments:
         paths = table2.column("path").to_pylist()
         assert "report.pdf" not in paths
 
+    def test_identical_files_in_same_batch_deduped(
+        self, tmp_path: Path, con: duckdb.DuckDBPyConnection,
+    ):
+        """Two files with identical bytes in the same batch must not both register.
+
+        a.pdf and b.pdf contain the same bytes,
+        producing the same doc_id. Only the first should be accepted;
+        the second must be skipped to preserve (run_id, doc_id) uniqueness.
+        """
+        case_root = tmp_path / "case_dup"
+        case_root.mkdir()
+
+        identical_content = b"identical-pdf-content"
+        (case_root / "a.pdf").write_bytes(identical_content)
+        (case_root / "b.pdf").write_bytes(identical_content)
+
+        files = discover_documents(case_root)
+        table = register_documents(files, case_root, "run1", con)
+
+        # Only one row should be registered
+        assert len(table) == 1
+
+        # Contract validation must pass (no duplicate run_id+doc_id)
+        errors = validate_contract_rules(table, "docs")
+        assert errors == []
+
 
 # ---------------------------------------------------------------------------
 # End-to-end orchestrator tests

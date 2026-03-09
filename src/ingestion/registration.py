@@ -86,9 +86,10 @@ def register_documents(
 
     rows = []
     skipped = 0
+    seen_doc_ids: set[str] = set()
     for fp in file_paths:
         row = build_doc_row(fp, case_root, run_id, extracted_at)
-        if row["doc_id"] in existing_doc_ids:
+        if row["doc_id"] in existing_doc_ids or row["doc_id"] in seen_doc_ids:
             logger.info("Skipping already-registered doc: %s", row["path"])
             skipped += 1
             continue
@@ -99,6 +100,7 @@ def register_documents(
             )
             skipped += 1
             continue
+        seen_doc_ids.add(row["doc_id"])
         rows.append(row)
 
     logger.info(

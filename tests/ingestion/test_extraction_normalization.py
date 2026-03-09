@@ -343,7 +343,7 @@ class TestRunExtractionAndNormalization:
     ):
         """Rerun after in-place file change must not corrupt the docs row.
 
-        Scenario from code review: ingest a 1-page PDF with run_id=R,
+        Ingest a 1-page PDF with run_id=R,
         replace the file with a 3-page PDF, rerun with run_id=R.
         The docs row must keep page_count=1 (from the original extraction),
         and the changed file must be skipped entirely.
