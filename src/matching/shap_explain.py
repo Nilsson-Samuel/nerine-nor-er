@@ -1,7 +1,8 @@
-"""SHAP explanation plumbing for LightGBM scored-pair output.
+"""LightGBM feature-contribution formatting for scored-pair output.
 
-This module keeps SHAP generation optional and formats explanations into the
-strict top-5 contract required by the scored-pairs schema.
+This module keeps explanation generation optional and formats LightGBM native
+tree contributions into the strict top-5 contract required by the
+scored-pairs schema.
 """
 
 from __future__ import annotations
@@ -17,7 +18,7 @@ DEFAULT_SHAP_TOP_K = 5
 
 
 def empty_shap_top5(row_count: int) -> list[list[dict[str, float]]]:
-    """Return contract-safe empty SHAP lists for one scored table."""
+    """Return contract-safe empty explanation lists for one scored table."""
     return [[] for _ in range(row_count)]
 
 
@@ -40,19 +41,38 @@ def _booster_from_model(model: LGBMClassifier | Booster) -> Booster:
 
 
 def _normalize_shap_values(raw_values: object) -> np.ndarray:
-    """Normalize SHAP output variants into a 2D float array."""
-    values = getattr(raw_values, "values", raw_values)
-    if isinstance(values, list):
-        values = values[-1]
-
-    matrix = np.asarray(values, dtype=np.float64)
-    if matrix.ndim == 3:
-        if matrix.shape[-1] == 2:
-            matrix = matrix[:, :, -1]
-        elif matrix.shape[1] == 2:
-            matrix = matrix[:, -1, :]
+    """Normalize contribution output into a 2D float array."""
+    matrix = np.asarray(raw_values, dtype=np.float64)
+    if matrix.ndim == 1:
+        matrix = matrix.reshape(1, -1)
     if matrix.ndim != 2:
         raise RuntimeError("SHAP values must resolve to a 2D matrix")
+    return matrix
+
+
+def _resolve_feature_names(
+    feature_names: list[str] | None,
+    booster: Booster,
+    feature_count: int,
+) -> list[str]:
+    """Resolve feature names from input data, booster metadata, or a stable fallback."""
+    resolved = feature_names or list(booster.feature_name())
+    if len(resolved) == feature_count:
+        return resolved
+    return [f"feature_{index}" for index in range(feature_count)]
+
+
+def _coerce_contribution_matrix(
+    raw_values: object,
+    *,
+    feature_count: int,
+) -> np.ndarray:
+    """Normalize model contributions and strip the LightGBM bias term when present."""
+    matrix = _normalize_shap_values(raw_values)
+    if matrix.shape[1] == feature_count + 1:
+        return matrix[:, :feature_count]
+    if matrix.shape[1] != feature_count:
+        raise RuntimeError("feature contributions must align with the feature matrix columns")
     return matrix
 
 
@@ -62,7 +82,7 @@ def format_shap_top5(
     *,
     top_k: int = DEFAULT_SHAP_TOP_K,
 ) -> list[dict[str, float]]:
-    """Format one SHAP row into sorted, unique top-k feature/value structs."""
+    """Format one contribution row into sorted, unique top-k feature/value structs."""
     if len(feature_names) != len(shap_values):
         raise ValueError("feature_names and shap_values must have the same length")
     if top_k < 1:
@@ -90,7 +110,7 @@ def explain_lightgbm_top5(
     max_rows: int | None = None,
     top_k: int = DEFAULT_SHAP_TOP_K,
 ) -> list[list[dict[str, float]]]:
-    """Generate contract-safe SHAP top-k lists or return empty placeholders."""
+    """Generate contract-safe top-k contribution lists or return empty placeholders."""
     matrix, feature_names = _coerce_matrix(X)
     row_count = matrix.shape[0]
     if not enabled:
@@ -100,19 +120,16 @@ def explain_lightgbm_top5(
     if max_rows is not None and max_rows < 0:
         raise ValueError("max_rows must be >= 0")
 
-    try:
-        import shap
-    except ImportError as exc:
-        raise RuntimeError("shap is required when explanations are enabled") from exc
-
     booster = _booster_from_model(model)
-    resolved_feature_names = feature_names or list(booster.feature_name())
+    resolved_feature_names = _resolve_feature_names(feature_names, booster, matrix.shape[1])
     explain_row_count = row_count if max_rows is None else min(row_count, max_rows)
     if explain_row_count == 0:
         return empty_shap_top5(row_count)
-    explainer = shap.TreeExplainer(booster)
-    raw_values = explainer(matrix[:explain_row_count], check_additivity=False)
-    shap_matrix = _normalize_shap_values(raw_values)
+    raw_values = booster.predict(matrix[:explain_row_count], pred_contrib=True)
+    shap_matrix = _coerce_contribution_matrix(
+        raw_values,
+        feature_count=len(resolved_feature_names),
+    )
 
     top5 = [
         format_shap_top5(resolved_feature_names, row_values, top_k=top_k)

@@ -198,8 +198,10 @@ def run_optuna_study(
         n_trials=n_trials,
         show_progress_bar=False,
     )
-
     completed_trials = sum(trial.value is not None for trial in study.trials)
+    best_value = float(study.best_value)
+    best_params = dict(study.best_params)
+
     artifact_name: str | None = None
     artifact_written = False
     if (
@@ -211,8 +213,8 @@ def run_optuna_study(
         out_path.mkdir(parents=True, exist_ok=True)
         artifact_name = _write_best_params_artifact(
             out_path,
-            best_params=study.best_params,
-            best_value=float(study.best_value),
+            best_params=best_params,
+            best_value=best_value,
             n_trials_completed=completed_trials,
             beta=beta,
             threshold=threshold,
@@ -225,8 +227,8 @@ def run_optuna_study(
         mode=mode,
         n_trials_requested=n_trials,
         n_trials_completed=completed_trials,
-        best_value=float(study.best_value),
+        best_value=best_value,
         best_params_artifact_written=artifact_written,
         best_params_artifact=artifact_name,
-        best_params_found=bool(study.best_params),
+        best_params_found=bool(best_params),
     )

@@ -7,3 +7,4 @@ Metaphone==0.6
 RapidFuzz==3.14.3
 lightgbm==4.6.0
 scikit-learn==1.8.0
+optuna==4.7.0

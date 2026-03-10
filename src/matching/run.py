@@ -244,6 +244,7 @@ def _build_scoring_metadata(
         "params_used": str(model_metadata.get("training_param_source", "baseline")),
         "tuning": tuning_summary,
         "shap": {
+            "method": "lightgbm_pred_contrib",
             "enabled": enable_shap,
             "generated": explained_row_count > 0,
             "explained_row_count": explained_row_count,

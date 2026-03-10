@@ -1,4 +1,4 @@
-"""Tests for matching-stage tuning and SHAP plumbing."""
+"""Tests for matching-stage tuning and explanation plumbing."""
 
 from __future__ import annotations
 
@@ -128,6 +128,7 @@ def test_run_scoring_disabled_hooks_keep_empty_shap_and_write_metadata(
     assert metadata["params_used"] == "baseline"
     assert metadata["tuning"]["status"] == "disabled"
     assert metadata["shap"] == {
+        "method": "lightgbm_pred_contrib",
         "enabled": False,
         "generated": False,
         "explained_row_count": 0,
@@ -163,6 +164,7 @@ def test_run_scoring_with_shap_enabled_produces_contract_safe_top5(
         _assert_shap_contract(row)
     assert all(row == [] for row in skipped_rows)
     assert metadata["shap"] == {
+        "method": "lightgbm_pred_contrib",
         "enabled": True,
         "generated": True,
         "explained_row_count": 3,
@@ -185,6 +187,7 @@ def test_run_scoring_with_shap_max_rows_zero_writes_empty_explanations(
 
     assert all(row == [] for row in scored["shap_top5"].to_list())
     assert metadata["shap"] == {
+        "method": "lightgbm_pred_contrib",
         "enabled": True,
         "generated": False,
         "explained_row_count": 0,
