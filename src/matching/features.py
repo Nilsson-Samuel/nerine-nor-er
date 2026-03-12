@@ -236,10 +236,10 @@ def cosine_sim_from_lookup(
     """Compute cosine similarity from entity IDs and an aligned embedding matrix.
 
     Embeddings are expected to be L2-normalized upstream, so cosine is a dot
-    product. Numeric noise is clipped into [0.0, 1.0].
+    product. Numeric noise is clipped into [-1.0, 1.0].
     """
     score = float(np.dot(matrix[id_index[entity_id_a]], matrix[id_index[entity_id_b]]))
-    return float(np.clip(score, 0.0, 1.0))
+    return float(np.clip(score, -1.0, 1.0))
 
 
 def _lookup_embedding_row_indices(
@@ -263,7 +263,7 @@ def build_embedding_features(
 ) -> pl.DataFrame:
     """Compute cosine_sim_entity and cosine_sim_context for each pair row.
 
-    Returns only the two embedding feature columns, preserving input row order.
+    Returns raw cosine similarities in [-1.0, 1.0], preserving input row order.
     """
     if pairs_df.is_empty():
         return pl.DataFrame(
@@ -290,8 +290,8 @@ def build_embedding_features(
 
     return pl.DataFrame(
         {
-            "cosine_sim_entity": np.clip(entity_cosine, 0.0, 1.0).astype(np.float64),
-            "cosine_sim_context": np.clip(context_cosine, 0.0, 1.0).astype(np.float64),
+            "cosine_sim_entity": np.clip(entity_cosine, -1.0, 1.0).astype(np.float64),
+            "cosine_sim_context": np.clip(context_cosine, -1.0, 1.0).astype(np.float64),
         }
     )
 

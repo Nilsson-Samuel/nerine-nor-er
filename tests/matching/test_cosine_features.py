@@ -36,10 +36,10 @@ def test_cosine_sim_from_lookup_orthogonal_vectors_is_near_zero() -> None:
     assert abs(cosine_sim_from_lookup("a", "b", matrix, index)) < 1e-12
 
 
-def test_cosine_sim_from_lookup_negative_similarity_is_clipped_to_zero() -> None:
+def test_cosine_sim_from_lookup_negative_similarity_is_preserved() -> None:
     matrix = np.array([[1.0, 0.0], [-1.0, 0.0]], dtype=np.float32)
     index = {"a": 0, "b": 1}
-    assert cosine_sim_from_lookup("a", "b", matrix, index) == 0.0
+    assert cosine_sim_from_lookup("a", "b", matrix, index) == -1.0
 
 
 def test_build_embedding_features_controlled_values() -> None:
@@ -54,11 +54,11 @@ def test_build_embedding_features_controlled_values() -> None:
     )
     artifacts = EmbeddingArtifacts(
         embeddings=np.array(
-            [[1.0, 0.0], [1.0, 0.0], [0.0, 1.0]],
+            [[1.0, 0.0], [1.0, 0.0], [-1.0, 0.0]],
             dtype=np.float32,
         ),
         context_embeddings=np.array(
-            [[1.0, 0.0], [1.0, 0.0], [0.0, 1.0]],
+            [[1.0, 0.0], [1.0, 0.0], [-1.0, 0.0]],
             dtype=np.float32,
         ),
         embedding_entity_ids=np.array(["e1", "e2", "e3"]),
@@ -67,8 +67,8 @@ def test_build_embedding_features_controlled_values() -> None:
     result = build_embedding_features(pairs, artifacts)
 
     assert result.columns == EMBEDDING_FEATURE_COLUMNS
-    assert result["cosine_sim_entity"].to_list() == [1.0, 0.0]
-    assert result["cosine_sim_context"].to_list() == [1.0, 0.0]
+    assert result["cosine_sim_entity"].to_list() == [1.0, -1.0]
+    assert result["cosine_sim_context"].to_list() == [1.0, -1.0]
 
 
 def test_build_embedding_features_fixture_output_is_bounded_and_non_null(
@@ -82,7 +82,7 @@ def test_build_embedding_features_fixture_output_is_bounded_and_non_null(
     assert result.columns == EMBEDDING_FEATURE_COLUMNS
     for col in EMBEDDING_FEATURE_COLUMNS:
         assert result[col].null_count() == 0
-        assert result[col].min() >= 0.0
+        assert result[col].min() >= -1.0
         assert result[col].max() <= 1.0
 
 
