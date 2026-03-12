@@ -1,8 +1,8 @@
 """Extraction stage orchestrator — NER, normalization, dedup, context, entities.parquet.
 
-Reads chunks.parquet, runs NER + regex extraction on each chunk, and produces
-a unified mention stream with char-level provenance.  Later steps
-add normalization, dedup, context extraction, and parquet writing.
+Reads chunks.parquet, runs NER + regex extraction on each chunk, normalizes
+mentions by entity type, deduplicates within each document, and produces
+entity records with full position provenance.
 """
 
 import logging
@@ -11,6 +11,8 @@ from pathlib import Path
 import duckdb
 import pyarrow.parquet as pq
 
+from src.extraction.dedup import dedup_mentions
+from src.extraction.entity_normalizer import normalize_entity
 from src.extraction.ner import build_ner, extract_ner_mentions
 from src.extraction.regex_supplements import (
     extract_regex_mentions,
@@ -77,6 +79,28 @@ def run_mention_extraction(
     logger.info("Mentions by type: %s", type_counts)
 
     return all_mentions
+
+
+def run_normalization_and_dedup(mentions: list[dict]) -> list[dict]:
+    """Normalize mentions by entity type and deduplicate within each document.
+
+    Args:
+        mentions: Raw mention dicts from run_mention_extraction().
+
+    Returns:
+        List of deduped entity dicts with normalized text and position provenance.
+    """
+    if not mentions:
+        return []
+
+    # Add normalized text to each mention
+    for m in mentions:
+        m["normalized"] = normalize_entity(m["text"], m["type"])
+
+    # Skip mentions that normalized to empty
+    mentions = [m for m in mentions if m["normalized"]]
+
+    return dedup_mentions(mentions)
 
 
 def _load_chunks(
