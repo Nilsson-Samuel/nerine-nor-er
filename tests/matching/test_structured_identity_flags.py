@@ -36,6 +36,10 @@ def test_first_name_match_per_negative() -> None:
     assert first_name_match("Per Hansen", "Anders Hansen", "PER", "PER") == 0
 
 
+def test_first_name_match_unicode_casefold_equivalent() -> None:
+    assert first_name_match("Straße Hansen", "STRASSE Olsen", "PER", "PER") == 1
+
+
 def test_first_name_match_non_per_forced_zero() -> None:
     assert first_name_match("DNB ASA", "DNB Bank", "ORG", "ORG") == 0
 
@@ -46,6 +50,10 @@ def test_last_name_match_per_positive() -> None:
 
 def test_last_name_match_per_negative() -> None:
     assert last_name_match("Per Hansen", "Per Johansen", "PER", "PER") == 0
+
+
+def test_last_name_match_unicode_casefold_equivalent() -> None:
+    assert last_name_match("Per Straße", "Pål STRASSE", "PER", "PER") == 1
 
 
 def test_last_name_match_non_per_forced_zero() -> None:
@@ -95,6 +103,24 @@ def test_build_structured_identity_features_binary_int_outputs() -> None:
     for col in STRUCTURED_IDENTITY_FEATURE_COLUMNS:
         values = set(result[col].to_list())
         assert values <= {0, 1}
+
+
+def test_build_structured_identity_features_unicode_consistency() -> None:
+    pairs = pl.DataFrame(
+        {
+            "context_a": ["", ""],
+            "context_b": ["", ""],
+            "name_a": ["Straße Hansen", "Per Straße"],
+            "name_b": ["STRASSE Olsen", "Pål STRASSE"],
+            "entity_type_a": ["PER", "PER"],
+            "entity_type_b": ["PER", "PER"],
+        }
+    )
+
+    result = build_structured_identity_features(pairs)
+
+    assert result["first_name_match"].to_list() == [1, 0]
+    assert result["last_name_match"].to_list() == [0, 1]
 
 
 def test_build_structured_identity_features_empty_input_schema() -> None:

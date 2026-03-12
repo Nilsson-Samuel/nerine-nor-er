@@ -12,6 +12,7 @@ Includes:
 
 from pathlib import Path
 import re
+import unicodedata
 from typing import NamedTuple
 
 import duckdb
@@ -337,6 +338,11 @@ def _name_tokens(name: str) -> list[str]:
     return (name or "").strip().split()
 
 
+def _normalize_name_token(token: str) -> str:
+    """Normalize a single name token for Unicode-safe equality checks."""
+    return unicodedata.normalize("NFC", token).casefold()
+
+
 def _is_per_pair(type_a: str, type_b: str) -> bool:
     """True when both entity types are PER (case-insensitive)."""
     return (type_a or "").upper() == "PER" and (type_b or "").upper() == "PER"
@@ -350,7 +356,7 @@ def first_name_match(name_a: str, name_b: str, type_a: str, type_b: str) -> int:
     tokens_b = _name_tokens(name_b)
     if not tokens_a or not tokens_b:
         return 0
-    return int(tokens_a[0].casefold() == tokens_b[0].casefold())
+    return int(_normalize_name_token(tokens_a[0]) == _normalize_name_token(tokens_b[0]))
 
 
 def last_name_match(name_a: str, name_b: str, type_a: str, type_b: str) -> int:
@@ -361,7 +367,7 @@ def last_name_match(name_a: str, name_b: str, type_a: str, type_b: str) -> int:
     tokens_b = _name_tokens(name_b)
     if not tokens_a or not tokens_b:
         return 0
-    return int(tokens_a[-1].casefold() == tokens_b[-1].casefold())
+    return int(_normalize_name_token(tokens_a[-1]) == _normalize_name_token(tokens_b[-1]))
 
 
 def build_structured_identity_features(pairs_df: pl.DataFrame) -> pl.DataFrame:
@@ -392,23 +398,25 @@ def build_structured_identity_features(pairs_df: pl.DataFrame) -> pl.DataFrame:
     first_b = pl.col("name_b").fill_null("").str.extract(r"^\s*(\S+)", group_index=1)
     last_a = pl.col("name_a").fill_null("").str.extract(r"(\S+)\s*$", group_index=1)
     last_b = pl.col("name_b").fill_null("").str.extract(r"(\S+)\s*$", group_index=1)
+    normalized_first_a = first_a.map_elements(_normalize_name_token, return_dtype=pl.String)
+    normalized_first_b = first_b.map_elements(_normalize_name_token, return_dtype=pl.String)
+    normalized_last_a = last_a.map_elements(_normalize_name_token, return_dtype=pl.String)
+    normalized_last_b = last_b.map_elements(_normalize_name_token, return_dtype=pl.String)
 
     return pairs_df.select(
         (
             (ids_a.list.len() > 0) & (ids_a.list.set_intersection(ids_b).list.len() > 0)
         ).cast(pl.Int64).alias("norwegian_id_match"),
-        (
-            per_pair
-            & first_a.is_not_null()
-            & first_b.is_not_null()
-            & first_a.str.to_lowercase().eq(first_b.str.to_lowercase())
-        ).cast(pl.Int64).alias("first_name_match"),
-        (
-            per_pair
-            & last_a.is_not_null()
-            & last_b.is_not_null()
-            & last_a.str.to_lowercase().eq(last_b.str.to_lowercase())
-        ).cast(pl.Int64).alias("last_name_match"),
+        pl.when(per_pair & first_a.is_not_null() & first_b.is_not_null())
+        .then(normalized_first_a.eq(normalized_first_b))
+        .otherwise(False)
+        .cast(pl.Int64)
+        .alias("first_name_match"),
+        pl.when(per_pair & last_a.is_not_null() & last_b.is_not_null())
+        .then(normalized_last_a.eq(normalized_last_b))
+        .otherwise(False)
+        .cast(pl.Int64)
+        .alias("last_name_match"),
     )
 
 
