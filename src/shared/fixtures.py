@@ -21,15 +21,6 @@ DEFAULT_RUN_ID = "mock_run_001"
 _EMBEDDING_DIM = 768
 _EMBEDDING_SEED = 42
 
-# Pyarrow type for a single position struct in the positions list column.
-_POSITION_TYPE = pa.struct([
-    ("chunk_id", pa.string()),
-    ("char_start", pa.int32()),
-    ("char_end", pa.int32()),
-    ("page_num", pa.int32()),
-    ("source_unit_kind", pa.string()),
-])
-
 # --- Stable deterministic IDs (seed → 32-char lowercase hex) ---
 
 def _hex_id(seed: str) -> str:
@@ -118,7 +109,10 @@ def build_mock_entities(run_id: str = DEFAULT_RUN_ID) -> pa.Table:
             "char_end":    pa.array([r[7] for r in rows],   type=pa.int32()),
             "context":     pa.array([r[8] for r in rows],   type=pa.string()),
             "count":       pa.array([r[9] for r in rows],   type=pa.int32()),
-            "positions":   pa.array([r[10] for r in rows],  type=pa.list_(_POSITION_TYPE)),
+            "positions":   pa.array(
+                [r[10] for r in rows],
+                type=pa.list_(schemas.POSITION_STRUCT_TYPE),
+            ),
         },
         schema=schemas.ENTITIES_SCHEMA,
     )

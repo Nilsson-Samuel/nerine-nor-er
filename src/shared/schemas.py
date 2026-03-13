@@ -12,6 +12,16 @@ import math
 import polars as pl
 import pyarrow as pa
 
+from src.shared.validators import is_hex32, is_lower_trimmed_non_empty
+
+
+POSITION_STRUCT_TYPE = pa.struct([
+    ("chunk_id", pa.string()),
+    ("char_start", pa.int32()),
+    ("char_end", pa.int32()),
+    ("page_num", pa.int32()),
+    ("source_unit_kind", pa.string()),
+])
 
 # Handoff schemas (Developer A -> Developer B boundary)
 
@@ -27,13 +37,7 @@ ENTITIES_SCHEMA = pa.schema([
     ("char_end", pa.int32()),  # Half-open span end, must be > char_start
     ("context", pa.string()),  # Context window text around mention
     ("count", pa.int32()),  # Number of merged mentions represented by this row
-    ("positions", pa.list_(pa.struct([
-        ("chunk_id", pa.string()),
-        ("char_start", pa.int32()),
-        ("char_end", pa.int32()),
-        ("page_num", pa.int32()),
-        ("source_unit_kind", pa.string()),
-    ]))),  # Provenance list of merged mentions
+    ("positions", pa.list_(POSITION_STRUCT_TYPE)),  # Provenance list of merged mentions
 ])
 
 CANDIDATE_PAIRS_SCHEMA = pa.schema([
@@ -79,7 +83,6 @@ HANDOFF_MANIFEST_KEYS = {
 VALID_ENTITY_TYPES = {"PER", "ORG", "LOC", "ITEM", "VEH", "COMM", "FIN"}
 VALID_BLOCKING_METHODS = {"faiss", "phonetic", "minhash"}
 VALID_BLOCKING_SOURCES = {"faiss", "phonetic", "minhash", "multi"}
-_HEX32_CHARS = set("0123456789abcdef")  # For validating 32-char lowercase hex strings
 
 
 # Validate only column presence and exact PyArrow types against a schema contract.
@@ -116,7 +119,9 @@ def validate_contract_rules(
     Args:
         table: Loaded Parquet table.
         contract_name: One of `entities`, `entities.parquet`,
-            `candidate_pairs`, or `candidate_pairs.parquet`.
+            `candidate_pairs`, `candidate_pairs.parquet`,
+            `scored_pairs`, or `scored_pairs.parquet`.
+        candidate_pairs_table: Candidate pairs used to verify scored-pair coverage.
 
     Returns:
         List[str]: Validation errors. Empty list means contract-valid.
@@ -164,15 +169,15 @@ def _validate_entities_rules(table: pa.Table) -> list[str]:
         count = row["count"]
         positions = row["positions"]
 
-        if not _is_lower_trimmed_non_empty(run_id):
+        if not is_lower_trimmed_non_empty(run_id):
             errors.append(
                 f"row {row_index}: run_id must be lowercase, trimmed, non-empty"
             )
-        if not _is_hex32(entity_id):
+        if not is_hex32(entity_id):
             errors.append(f"row {row_index}: entity_id must be 32-char lowercase hex")
-        if not _is_hex32(doc_id):
+        if not is_hex32(doc_id):
             errors.append(f"row {row_index}: doc_id must be 32-char lowercase hex")
-        if not _is_hex32(chunk_id):
+        if not is_hex32(chunk_id):
             errors.append(f"row {row_index}: chunk_id must be 32-char lowercase hex")
         if not _is_non_empty_string(text):
             errors.append(f"row {row_index}: text must be non-empty")
@@ -218,13 +223,13 @@ def _validate_candidate_pair_rules(table: pa.Table) -> list[str]:
         blocking_source = row["blocking_source"]
         blocking_method_count = row["blocking_method_count"]
 
-        if not _is_lower_trimmed_non_empty(run_id):
+        if not is_lower_trimmed_non_empty(run_id):
             errors.append(
                 f"row {row_index}: run_id must be lowercase, trimmed, non-empty"
             )
-        if not _is_hex32(entity_id_a):
+        if not is_hex32(entity_id_a):
             errors.append(f"row {row_index}: entity_id_a must be 32-char lowercase hex")
-        if not _is_hex32(entity_id_b):
+        if not is_hex32(entity_id_b):
             errors.append(f"row {row_index}: entity_id_b must be 32-char lowercase hex")
         if isinstance(entity_id_a, str) and isinstance(entity_id_b, str):
             if entity_id_a == entity_id_b:
@@ -572,24 +577,6 @@ def _validate_shap_top5(row_index: int, shap_top5: object) -> list[str]:
 
 def _is_non_empty_string(value: object) -> bool:
     return isinstance(value, str) and value != ""
-
-
-# Check ID-like fields follow lowercase + trimmed + non-empty contract rules.
-def _is_lower_trimmed_non_empty(value: object) -> bool:
-    return (
-        isinstance(value, str)
-        and value != ""
-        and value == value.strip()
-        and value == value.lower()
-    )
-
-
-def _is_hex32(value: object) -> bool:
-    return (
-        isinstance(value, str)
-        and len(value) == 32
-        and all(c in _HEX32_CHARS for c in value)
-    )
 
 
 def _is_finite_number(value: object) -> bool:

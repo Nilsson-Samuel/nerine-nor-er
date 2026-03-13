@@ -3,6 +3,28 @@
 import numpy as np
 
 
+_HEX32_CHARS = set("0123456789abcdef")
+
+
+def is_lower_trimmed_non_empty(value: object) -> bool:
+    """Return True when a string is lowercase, trimmed, and non-empty."""
+    return (
+        isinstance(value, str)
+        and value != ""
+        and value == value.strip()
+        and value == value.lower()
+    )
+
+
+def is_hex32(value: object) -> bool:
+    """Return True when a value is a 32-character lowercase hex string."""
+    return (
+        isinstance(value, str)
+        and len(value) == 32
+        and all(char in _HEX32_CHARS for char in value)
+    )
+
+
 def _validate_l2_normalized_rows(
     matrix: np.ndarray,
     matrix_name: str,

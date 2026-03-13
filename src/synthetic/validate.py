@@ -10,7 +10,11 @@ import numpy as np
 import pyarrow.parquet as pq
 
 from src.shared import schemas
-from src.shared.validators import validate_embedding_alignment
+from src.shared.validators import (
+    is_hex32,
+    is_lower_trimmed_non_empty,
+    validate_embedding_alignment,
+)
 from src.synthetic.build_matching_dataset import LABELS_SCHEMA
 
 
@@ -21,7 +25,6 @@ EMBEDDING_FILES = (
     "context_embeddings.npy",
     "embedding_entity_ids.npy",
 )
-_HEX32_CHARS = set("0123456789abcdef")
 
 
 def _prefix_errors(file_name: str, errors: list[str]) -> list[str]:
@@ -58,15 +61,15 @@ def _validate_labels_table(table) -> tuple[list[str], bool]:
         entity_id_a = row["entity_id_a"]
         entity_id_b = row["entity_id_b"]
         key = (run_id, entity_id_a, entity_id_b)
-        if not _is_lower_trimmed_non_empty(run_id):
+        if not is_lower_trimmed_non_empty(run_id):
             errors.append(
                 f"labels.parquet: row {row_index}: run_id must be lowercase, trimmed, non-empty"
             )
-        if not _is_hex32(entity_id_a):
+        if not is_hex32(entity_id_a):
             errors.append(
                 f"labels.parquet: row {row_index}: entity_id_a must be 32-char lowercase hex"
             )
-        if not _is_hex32(entity_id_b):
+        if not is_hex32(entity_id_b):
             errors.append(
                 f"labels.parquet: row {row_index}: entity_id_b must be 32-char lowercase hex"
             )
@@ -96,23 +99,6 @@ def _table_pair_keys(table) -> set[tuple[str, str, str]]:
         (row["run_id"], row["entity_id_a"], row["entity_id_b"])
         for row in table.to_pylist()
     }
-
-
-def _is_lower_trimmed_non_empty(value: object) -> bool:
-    return (
-        isinstance(value, str)
-        and value != ""
-        and value == value.strip()
-        and value == value.lower()
-    )
-
-
-def _is_hex32(value: object) -> bool:
-    return (
-        isinstance(value, str)
-        and len(value) == 32
-        and all(char in _HEX32_CHARS for char in value)
-    )
 
 
 def _log_label_distribution(labels_table) -> None:

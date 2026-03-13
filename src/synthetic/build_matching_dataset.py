@@ -31,14 +31,6 @@ LABELS_SCHEMA = pa.schema([
 ])
 PAIR_KEY_COLUMNS = ["run_id", "entity_id_a", "entity_id_b"]
 
-_POSITION_TYPE = pa.struct([
-    ("chunk_id", pa.string()),
-    ("char_start", pa.int32()),
-    ("char_end", pa.int32()),
-    ("page_num", pa.int32()),
-    ("source_unit_kind", pa.string()),
-])
-
 
 class EntityRecord(NamedTuple):
     """Minimal entity metadata needed for pair and embedding generation."""
@@ -208,7 +200,10 @@ def _build_entities(
             "char_end": pa.array([row["char_end"] for row in rows], type=pa.int32()),
             "context": pa.array([row["context"] for row in rows], type=pa.string()),
             "count": pa.array([row["count"] for row in rows], type=pa.int32()),
-            "positions": pa.array([row["positions"] for row in rows], type=pa.list_(_POSITION_TYPE)),
+            "positions": pa.array(
+                [row["positions"] for row in rows],
+                type=pa.list_(schemas.POSITION_STRUCT_TYPE),
+            ),
         },
         schema=schemas.ENTITIES_SCHEMA,
     )
