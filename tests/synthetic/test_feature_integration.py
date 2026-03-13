@@ -84,6 +84,8 @@ UNIT_INTERVAL_COLUMNS = [
     "token_jaccard_similarity",
     "token_containment_ratio",
     "char_trigram_jaccard_similarity",
+]
+COSINE_COLUMNS = [
     "cosine_sim_entity",
     "cosine_sim_context",
 ]
@@ -240,6 +242,8 @@ def test_run_features_on_synthetic_data_produces_complete_feature_matrix(
         assert features[column].null_count() == 0
     for column in UNIT_INTERVAL_COLUMNS:
         assert features[column].is_between(0.0, 1.0, closed="both").all()
+    for column in COSINE_COLUMNS:
+        assert features[column].is_between(-1.0, 1.0, closed="both").all()
     for column in BINARY_COLUMNS:
         assert set(features[column].unique().to_list()).issubset({0, 1})
     assert features["blocking_method_count"].min() >= 1
