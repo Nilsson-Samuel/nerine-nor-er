@@ -350,3 +350,23 @@ def test_build_empty_input_preserves_output_schema():
     result = build_string_features(pairs)
     assert len(result) == 0
     assert result.columns == ["run_id", "entity_id_a", "entity_id_b", *STRING_FEATURE_COLUMNS]
+
+
+def test_build_string_features_scale_sanity() -> None:
+    pair_count = 20_000
+    pairs = pl.DataFrame(
+        {
+            "run_id": ["run-1"] * pair_count,
+            "entity_id_a": [f"a-{i}" for i in range(pair_count)],
+            "entity_id_b": [f"b-{i}" for i in range(pair_count)],
+            "name_a": ["per hansen"] * (pair_count // 2) + ["dnb asa"] * (pair_count // 2),
+            "name_b": ["per hansen"] * (pair_count // 2) + ["den norske bank"] * (pair_count // 2),
+        }
+    )
+
+    result = build_string_features(pairs)
+
+    assert result.height == pair_count
+    assert result.columns == ["run_id", "entity_id_a", "entity_id_b", *STRING_FEATURE_COLUMNS]
+    for col in STRING_FEATURE_COLUMNS:
+        assert result[col].null_count() == 0

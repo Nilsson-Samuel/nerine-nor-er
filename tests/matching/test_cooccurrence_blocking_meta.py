@@ -58,6 +58,21 @@ def test_build_cooccurrence_meta_features_counts_and_passthrough() -> None:
     assert result["blocking_method_count"].to_list() == pairs["blocking_method_count"].to_list()
 
 
+def test_build_cooccurrence_meta_features_handles_null_and_empty_doc_ids() -> None:
+    pairs = pl.DataFrame(
+        {
+            "doc_id_a": ["doc-a", None, "", "doc-d"],
+            "doc_id_b": ["doc-a", "doc-b", "", None],
+            "blocking_method_count": [1, 2, 3, 4],
+        }
+    )
+
+    result = build_cooccurrence_meta_features(pairs)
+
+    assert result["shared_doc_count"].to_list() == [1, 0, 0, 0]
+    assert result["blocking_method_count"].to_list() == [1, 2, 3, 4]
+
+
 def test_full_feature_contract_contains_14_feature_columns(handoff_dir: Path) -> None:
     pairs = load_pairs_with_metadata(handoff_dir, DEFAULT_RUN_ID)
     artifacts = load_embedding_artifacts(handoff_dir)

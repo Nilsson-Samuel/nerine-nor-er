@@ -6,10 +6,11 @@ Includes:
 - Embedding artifact loader with strict alignment guards.
 - Structured identity flags from context/name/type fields.
 - Co-occurrence/blocking metadata features.
-- String/token features computed row-wise: 5 similarity scores in [0,1]
-  and 2 binary flags in {0,1}.
+- String/token features computed in a column-oriented pass: 5 similarity
+  scores in [0,1] and 2 binary flags in {0,1}.
 """
 
+from functools import lru_cache
 from pathlib import Path
 import re
 import unicodedata
@@ -454,22 +455,60 @@ def build_cooccurrence_meta_features(pairs_df: pl.DataFrame) -> pl.DataFrame:
             }
         )
 
-    shared_counts = [
-        shared_doc_count(doc_id_a, doc_id_b)
-        for doc_id_a, doc_id_b in pairs_df.select("doc_id_a", "doc_id_b").iter_rows()
-    ]
-
-    return pl.DataFrame(
-        {
-            "shared_doc_count": shared_counts,
-            "blocking_method_count": pairs_df["blocking_method_count"],
-        }
+    doc_id_a = pl.col("doc_id_a").fill_null("")
+    doc_id_b = pl.col("doc_id_b").fill_null("")
+    return pairs_df.select(
+        ((doc_id_a != "") & (doc_id_b != "") & doc_id_a.eq(doc_id_b))
+        .cast(pl.Int64)
+        .alias("shared_doc_count"),
+        pl.col("blocking_method_count"),
     ).select(COOCCURRENCE_META_FEATURE_COLUMNS)
 
 
 # ---------------------------------------------------------------------------
-# String/token feature helpers (pure Python, no DuckDB)
+# String/token feature helpers
 # ---------------------------------------------------------------------------
+
+@lru_cache(maxsize=65_536)
+def _token_set(name: str) -> frozenset[str]:
+    """Cache whitespace-tokenized names for repeated pair comparisons."""
+    if not name:
+        return frozenset()
+    return frozenset(name.split())
+
+
+@lru_cache(maxsize=65_536)
+def _char_trigrams(name: str) -> frozenset[str]:
+    """Cache character 3-grams for repeated compound-name comparisons."""
+    if len(name) < 3:
+        return frozenset()
+    return frozenset(name[i:i + 3] for i in range(len(name) - 2))
+
+
+@lru_cache(maxsize=65_536)
+def _abbreviation_tokens(name: str) -> tuple[str, ...]:
+    """Cache abbreviation tokenization after dot normalization."""
+    return tuple(name.replace(".", " ").lower().split())
+
+
+@lru_cache(maxsize=65_536)
+def _double_metaphone_codes(name: str) -> frozenset[str]:
+    """Cache phonetic codes because the same names recur across many pairs."""
+    if not name:
+        return frozenset()
+
+    normed = _phonetic_normalize(name)
+    codes: set[str] = set()
+    for tok in normed.split():
+        if len(tok) < 2:
+            continue
+        primary, secondary = doublemetaphone(tok)
+        if primary:
+            codes.add(primary)
+        if secondary and secondary != primary:
+            codes.add(secondary)
+    return frozenset(codes)
+
 
 def jaro_winkler_similarity(a: str, b: str) -> float:
     """Jaro-Winkler similarity in [0, 1]. Returns 0.0 for empty inputs."""
@@ -489,8 +528,8 @@ def token_jaccard_similarity(a: str, b: str) -> float:
     """Jaccard similarity of whitespace-tokenized name sets, in [0, 1]."""
     if not a or not b:
         return 0.0
-    toks_a = set(a.split())
-    toks_b = set(b.split())
+    toks_a = _token_set(a)
+    toks_b = _token_set(b)
     if not toks_a or not toks_b:
         return 0.0
     return len(toks_a & toks_b) / len(toks_a | toks_b)
@@ -504,12 +543,13 @@ def token_containment_ratio(a: str, b: str) -> float:
     """
     if not a or not b:
         return 0.0
-    toks_a = set(a.split())
-    toks_b = set(b.split())
+    toks_a = _token_set(a)
+    toks_b = _token_set(b)
     if not toks_a or not toks_b:
         return 0.0
     inter = len(toks_a & toks_b)
     return max(inter / len(toks_a), inter / len(toks_b))
+
 
 def char_trigram_jaccard_similarity(a: str, b: str) -> float:
     """Character 3-gram Jaccard similarity in [0, 1].
@@ -518,8 +558,8 @@ def char_trigram_jaccard_similarity(a: str, b: str) -> float:
     """
     if not a or not b:
         return 0.0
-    tgrams_a = {a[i:i + 3] for i in range(len(a) - 2)}
-    tgrams_b = {b[i:i + 3] for i in range(len(b) - 2)}
+    tgrams_a = _char_trigrams(a)
+    tgrams_b = _char_trigrams(b)
     if not tgrams_a or not tgrams_b:
         return 0.0
     return len(tgrams_a & tgrams_b) / len(tgrams_a | tgrams_b)
@@ -528,8 +568,8 @@ def char_trigram_jaccard_similarity(a: str, b: str) -> float:
 def _is_abbreviation(short: str, long: str) -> bool:
     """True if short is plausibly a prefix-abbreviation of long."""
     # Normalize dots to spaces so "D.N.B." tokenizes as ["D", "N", "B"].
-    s_toks = short.replace(".", " ").lower().split()
-    l_toks = long.replace(".", " ").lower().split()
+    s_toks = _abbreviation_tokens(short)
+    l_toks = _abbreviation_tokens(long)
     if not s_toks or not l_toks or len(l_toks) < 2:
         return False
 
@@ -569,26 +609,11 @@ def double_metaphone_overlap_flag(a: str, b: str) -> int:
     """
     if not a or not b:
         return 0
-
-    def _codes(name: str) -> set[str]:
-        """Collect all non-empty Double Metaphone codes for a name's tokens."""
-        normed = _phonetic_normalize(name)
-        codes: set[str] = set()
-        for tok in normed.split():
-            if len(tok) < 2:
-                continue
-            primary, secondary = doublemetaphone(tok)
-            if primary:
-                codes.add(primary)
-            if secondary and secondary != primary:
-                codes.add(secondary)
-        return codes
-
-    return int(bool(_codes(a) & _codes(b)))
+    return int(bool(_double_metaphone_codes(a) & _double_metaphone_codes(b)))
 
 
 # ---------------------------------------------------------------------------
-# Aggregate builder: applies all 7 string/token features row-wise
+# Aggregate builder: applies all 7 string/token features in one column-oriented pass
 # ---------------------------------------------------------------------------
 
 # Column names for the 7 string/token features.
@@ -609,6 +634,8 @@ def build_string_features(pairs_df: pl.DataFrame) -> pl.DataFrame:
     Accepts the output of load_pairs_with_names (columns: run_id, entity_id_a,
     entity_id_b, name_a, name_b). Returns pair key columns + 7 feature columns.
     No nulls in the output — empty/None names are treated as empty strings.
+    Uses cached helper preprocessing to reduce repeated Python work on common
+    names across large pair tables.
 
     Args:
         pairs_df: Polars DataFrame from load_pairs_with_names.
@@ -633,20 +660,44 @@ def build_string_features(pairs_df: pl.DataFrame) -> pl.DataFrame:
             }
         )
 
-    rows = []
-    for row in pairs_df.iter_rows(named=True):
-        a = row["name_a"] or ""
-        b = row["name_b"] or ""
-        rows.append({
-            "run_id": row["run_id"],
-            "entity_id_a": row["entity_id_a"],
-            "entity_id_b": row["entity_id_b"],
-            "jaro_winkler_similarity": jaro_winkler_similarity(a, b),
-            "levenshtein_ratio_similarity": levenshtein_ratio_similarity(a, b),
-            "token_jaccard_similarity": token_jaccard_similarity(a, b),
-            "token_containment_ratio": token_containment_ratio(a, b),
-            "char_trigram_jaccard_similarity": char_trigram_jaccard_similarity(a, b),
-            "abbreviation_match_flag": abbreviation_match_flag(a, b),
-            "double_metaphone_overlap_flag": double_metaphone_overlap_flag(a, b),
-        })
-    return pl.DataFrame(rows)
+    names_a = pairs_df["name_a"].fill_null("").to_list()
+    names_b = pairs_df["name_b"].fill_null("").to_list()
+    pair_keys = pairs_df.select("run_id", "entity_id_a", "entity_id_b")
+
+    return pair_keys.with_columns(
+        pl.Series(
+            "jaro_winkler_similarity",
+            [jaro_winkler_similarity(a, b) for a, b in zip(names_a, names_b)],
+            dtype=pl.Float64,
+        ),
+        pl.Series(
+            "levenshtein_ratio_similarity",
+            [levenshtein_ratio_similarity(a, b) for a, b in zip(names_a, names_b)],
+            dtype=pl.Float64,
+        ),
+        pl.Series(
+            "token_jaccard_similarity",
+            [token_jaccard_similarity(a, b) for a, b in zip(names_a, names_b)],
+            dtype=pl.Float64,
+        ),
+        pl.Series(
+            "token_containment_ratio",
+            [token_containment_ratio(a, b) for a, b in zip(names_a, names_b)],
+            dtype=pl.Float64,
+        ),
+        pl.Series(
+            "char_trigram_jaccard_similarity",
+            [char_trigram_jaccard_similarity(a, b) for a, b in zip(names_a, names_b)],
+            dtype=pl.Float64,
+        ),
+        pl.Series(
+            "abbreviation_match_flag",
+            [abbreviation_match_flag(a, b) for a, b in zip(names_a, names_b)],
+            dtype=pl.Int64,
+        ),
+        pl.Series(
+            "double_metaphone_overlap_flag",
+            [double_metaphone_overlap_flag(a, b) for a, b in zip(names_a, names_b)],
+            dtype=pl.Int64,
+        ),
+    )
