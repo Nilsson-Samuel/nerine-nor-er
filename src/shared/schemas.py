@@ -1,8 +1,8 @@
 """Parquet schema contracts for the entity resolution pipeline.
 
-This file is the handoff contract used by both developers for the blocking to matching interface.
-Use `validate()` for schema shape/type checks and `validate_contract_rules()`
-for strict value-level contract checks.
+Defines PyArrow schemas for all stage-output parquet files and provides
+shape/type validation (`validate`) and strict value-level contract
+validation (`validate_contract_rules`).
 """
 
 from __future__ import annotations
@@ -23,7 +23,41 @@ POSITION_STRUCT_TYPE = pa.struct([
     ("source_unit_kind", pa.string()),
 ])
 
+# ---------------------------------------------------------------------------
+# Ingestion schemas
+# ---------------------------------------------------------------------------
+
+DOCS_SCHEMA = pa.schema([
+    ("run_id", pa.string()),
+    ("doc_id", pa.string()),  # 32-char lowercase hex (truncated SHA-256)
+    ("path", pa.string()),  # Relative POSIX path from case root
+    ("mime_type", pa.string()),  # application/pdf or application/vnd.openxml...
+    ("source_unit_kind", pa.string()),  # pdf_page | docx_paragraph
+    ("page_count", pa.int32()),  # Nullable; filled during extraction
+    ("file_size", pa.int64()),  # > 0 bytes
+    ("extracted_at", pa.timestamp("us", tz="UTC")),
+])
+
+CHUNKS_SCHEMA = pa.schema([
+    ("run_id", pa.string()),
+    ("chunk_id", pa.string()),  # 32-char lowercase hex (hash of doc_id:chunk_index)
+    ("doc_id", pa.string()),  # FK to docs(run_id, doc_id)
+    ("chunk_index", pa.int32()),  # >= 0
+    ("text", pa.string()),  # Non-empty chunk text
+    ("source_unit_kind", pa.string()),  # pdf_page | docx_paragraph
+    ("page_num", pa.int32()),  # Page/paragraph index where chunk starts
+])
+
+VALID_MIME_TYPES = {
+    "application/pdf",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+}
+VALID_SOURCE_UNIT_KINDS = {"pdf_page", "docx_paragraph"}
+
+
+# ---------------------------------------------------------------------------
 # Handoff schemas (Developer A -> Developer B boundary)
+# ---------------------------------------------------------------------------
 
 ENTITIES_SCHEMA = pa.schema([
     ("run_id", pa.string()),  # Example: "run_2026_02_20_a1b2"
@@ -115,20 +149,32 @@ def validate_contract_rules(
     candidate_pairs_table: pa.Table | None = None,
 ) -> list[str]:
     """Validate strict value-level contract rules for a known table contract.
-
+   
     Args:
-        table: Loaded Parquet table.
-        contract_name: One of `entities`, `entities.parquet`,
-            `candidate_pairs`, `candidate_pairs.parquet`,
-            `scored_pairs`, or `scored_pairs.parquet`.
-        candidate_pairs_table: Candidate pairs used to verify scored-pair coverage.
-
+    table: Loaded Parquet table.
+    contract_name: One of `docs`, `docs.parquet`, `entities`,
+        `entities.parquet`, `candidate_pairs`, `candidate_pairs.parquet`,
+        `scored_pairs`, or `scored_pairs.parquet`.
+    candidate_pairs_table: Candidate pairs used to verify scored-pair coverage.
+            
     Returns:
         List[str]: Validation errors. Empty list means contract-valid.
 
     Raises:
         ValueError: If `contract_name` is not one of the supported contracts.
     """
+    if contract_name in {"docs", "docs.parquet"}:
+        schema_errors = validate(table, DOCS_SCHEMA)
+        if schema_errors:
+            return schema_errors
+        return _validate_docs_rules(table)
+
+    if contract_name in {"chunks", "chunks.parquet"}:
+        schema_errors = validate(table, CHUNKS_SCHEMA)
+        if schema_errors:
+            return schema_errors
+        return _validate_chunks_rules(table)
+
     if contract_name in {"entities", "entities.parquet"}:
         schema_errors = validate(table, ENTITIES_SCHEMA)
         if schema_errors:
@@ -148,6 +194,110 @@ def validate_contract_rules(
         return _validate_scored_pair_rules(table, candidate_pairs_table)
 
     raise ValueError(f"unsupported contract_name: {contract_name}")
+
+
+# Validate row-level doc invariants and uniqueness for docs.parquet.
+def _validate_docs_rules(table: pa.Table) -> list[str]:
+    errors: list[str] = []
+    seen_doc_keys: set[tuple[str, str]] = set()
+    seen_path_keys: set[tuple[str, str]] = set()
+
+    for row_index, row in enumerate(table.to_pylist(), start=1):
+        run_id = row["run_id"]
+        doc_id = row["doc_id"]
+        path = row["path"]
+        mime_type = row["mime_type"]
+        source_unit_kind = row["source_unit_kind"]
+        page_count = row["page_count"]
+        file_size = row["file_size"]
+
+        if not is_lower_trimmed_non_empty(run_id):
+            errors.append(
+                f"row {row_index}: run_id must be lowercase, trimmed, non-empty"
+            )
+        if not is_hex32(doc_id):
+            errors.append(f"row {row_index}: doc_id must be 32-char lowercase hex")
+        if not _is_non_empty_string(path):
+            errors.append(f"row {row_index}: path must be non-empty")
+        if mime_type not in VALID_MIME_TYPES:
+            errors.append(
+                f"row {row_index}: mime_type must be one of {sorted(VALID_MIME_TYPES)}"
+            )
+        if source_unit_kind not in VALID_SOURCE_UNIT_KINDS:
+            errors.append(
+                f"row {row_index}: source_unit_kind must be one of "
+                f"{sorted(VALID_SOURCE_UNIT_KINDS)}"
+            )
+        if page_count is not None and (not isinstance(page_count, int) or page_count < 0):
+            errors.append(f"row {row_index}: page_count must be >= 0 or null")
+        if not isinstance(file_size, int) or file_size <= 0:
+            errors.append(f"row {row_index}: file_size must be > 0")
+
+        # Uniqueness: (run_id, doc_id)
+        doc_key = (run_id, doc_id)
+        if doc_key in seen_doc_keys:
+            errors.append(f"row {row_index}: duplicate (run_id, doc_id) key")
+        seen_doc_keys.add(doc_key)
+
+        # Uniqueness: (run_id, path)
+        path_key = (run_id, path)
+        if path_key in seen_path_keys:
+            errors.append(f"row {row_index}: duplicate (run_id, path) key")
+        seen_path_keys.add(path_key)
+
+    return errors
+
+
+# Validate row-level chunk invariants and uniqueness for chunks.parquet.
+def _validate_chunks_rules(table: pa.Table) -> list[str]:
+    errors: list[str] = []
+    seen_chunk_keys: set[tuple[str, str]] = set()
+    seen_index_keys: set[tuple[str, str, int]] = set()
+
+    for row_index, row in enumerate(table.to_pylist(), start=1):
+        run_id = row["run_id"]
+        chunk_id = row["chunk_id"]
+        doc_id = row["doc_id"]
+        chunk_idx = row["chunk_index"]
+        text = row["text"]
+        source_unit_kind = row["source_unit_kind"]
+        page_num = row["page_num"]
+
+        if not is_lower_trimmed_non_empty(run_id):
+            errors.append(
+                f"row {row_index}: run_id must be lowercase, trimmed, non-empty"
+            )
+        if not is_hex32(chunk_id):
+            errors.append(f"row {row_index}: chunk_id must be 32-char lowercase hex")
+        if not is_hex32(doc_id):
+            errors.append(f"row {row_index}: doc_id must be 32-char lowercase hex")
+        if not isinstance(chunk_idx, int) or chunk_idx < 0:
+            errors.append(f"row {row_index}: chunk_index must be >= 0")
+        if not _is_non_empty_string(text):
+            errors.append(f"row {row_index}: text must be non-empty")
+        if source_unit_kind not in VALID_SOURCE_UNIT_KINDS:
+            errors.append(
+                f"row {row_index}: source_unit_kind must be one of "
+                f"{sorted(VALID_SOURCE_UNIT_KINDS)}"
+            )
+        if not isinstance(page_num, int) or page_num < 0:
+            errors.append(f"row {row_index}: page_num must be >= 0")
+
+        # Uniqueness: (run_id, chunk_id)
+        chunk_key = (run_id, chunk_id)
+        if chunk_key in seen_chunk_keys:
+            errors.append(f"row {row_index}: duplicate (run_id, chunk_id) key")
+        seen_chunk_keys.add(chunk_key)
+
+        # Uniqueness: (run_id, doc_id, chunk_index)
+        index_key = (run_id, doc_id, chunk_idx)
+        if index_key in seen_index_keys:
+            errors.append(
+                f"row {row_index}: duplicate (run_id, doc_id, chunk_index) key"
+            )
+        seen_index_keys.add(index_key)
+
+    return errors
 
 
 # Validate row-level entity invariants and uniqueness for entities.parquet.
