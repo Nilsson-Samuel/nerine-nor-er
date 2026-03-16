@@ -8,6 +8,15 @@ KEEP_SCORE_THRESHOLD = 0.60
 # Retained edges above this favor merging; lower retained edges favor splitting.
 OBJECTIVE_NEUTRAL_THRESHOLD = 0.80
 
+
 # Review-routing cutoff applied after clustering. This does not change graph building.
 # Provisional placeholder until phase-2 inspection on more realistic data.
-REVIEW_CONFIDENCE_THRESHOLD = 0.75
+BASE_CONFIDENCE_AUTO_MERGE_THRESHOLD = 0.85
+BASE_CONFIDENCE_REVIEW_THRESHOLD = 0.50
+
+# Keep routing policy separate from the evidence score so the same resolver output
+# can support low-HITL and more review-heavy operation without changing clustering.
+ROUTING_PROFILE = "quick_low_hitl"
+
+# Backward-compatible alias used by earlier resolution diagnostics.
+REVIEW_CONFIDENCE_THRESHOLD = BASE_CONFIDENCE_REVIEW_THRESHOLD
