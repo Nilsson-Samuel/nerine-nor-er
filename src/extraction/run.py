@@ -1,16 +1,18 @@
 """Extraction stage orchestrator — NER, normalization, dedup, context, entities.parquet.
 
 Reads chunks.parquet, runs NER + regex extraction on each chunk, normalizes
-mentions by entity type, deduplicates within each document, and produces
-entity records with full position provenance.
+mentions by entity type, deduplicates within each document, attaches context
+windows, and writes schema-valid entities.parquet with DuckDB registration.
 """
 
 import logging
+import time
 from pathlib import Path
 
 import duckdb
 import pyarrow.parquet as pq
 
+from src.extraction.context import extract_context
 from src.extraction.dedup import dedup_mentions
 from src.extraction.entity_normalizer import normalize_entity
 from src.extraction.ner import build_ner, extract_ner_mentions
@@ -18,8 +20,72 @@ from src.extraction.regex_supplements import (
     extract_regex_mentions,
     filter_overlapping_with_ner,
 )
+from src.extraction.writer import write_entities_parquet
+from src.shared.schemas import validate_contract_rules
 
 logger = logging.getLogger(__name__)
+
+
+def run_extraction(
+    data_dir: Path,
+    run_id: str,
+    con: duckdb.DuckDBPyConnection | None = None,
+) -> str:
+    """Run the full extraction pipeline: NER → normalize → dedup → context → write.
+
+    Args:
+        data_dir: Directory containing chunks.parquet (and output for entities.parquet).
+        run_id: Run identifier.
+        con: Optional DuckDB connection.
+
+    Returns:
+        The run_id used for this execution.
+    """
+    t0 = time.monotonic()
+
+    if con is None:
+        con = duckdb.connect()
+
+    data_dir = Path(data_dir)
+
+    # Step 1: Extract raw mentions from chunks
+    mentions = run_mention_extraction(data_dir, run_id, con)
+    if not mentions:
+        logger.warning("No mentions extracted — skipping remaining steps.")
+        return run_id
+
+    # Step 2: Normalize and deduplicate
+    entities = run_normalization_and_dedup(mentions)
+    if not entities:
+        logger.warning("No entities after dedup — skipping write.")
+        return run_id
+
+    # Step 3: Attach context windows (needs chunk text lookup)
+    chunk_texts = _build_chunk_text_lookup(data_dir / "chunks.parquet", run_id, con)
+    _attach_contexts(entities, chunk_texts)
+
+    # Step 4: Write entities.parquet
+    entities_path = write_entities_parquet(entities, run_id, data_dir, con)
+
+    # Step 5: Validate contract
+    if entities_path.exists():
+        table = pq.read_table(entities_path)
+        errors = validate_contract_rules(table, "entities")
+        if errors:
+            logger.error("entities.parquet contract validation failed:")
+            for err in errors:
+                logger.error("  %s", err)
+            raise ValueError(
+                f"entities.parquet contract validation failed with {len(errors)} errors"
+            )
+        logger.info("entities.parquet contract validation passed.")
+
+    elapsed = time.monotonic() - t0
+    logger.info(
+        "Extraction complete: %d entities in %.1fs (run_id=%s)",
+        len(entities), elapsed, run_id,
+    )
+    return run_id
 
 
 def run_mention_extraction(
@@ -149,3 +215,22 @@ def _extract_chunk_mentions(chunk: dict, ner_pipe: object) -> list[dict]:
     regex_mentions = filter_overlapping_with_ner(regex_mentions, ner_mentions)
 
     return ner_mentions + regex_mentions
+
+
+def _build_chunk_text_lookup(
+    chunks_path: Path, run_id: str, con: duckdb.DuckDBPyConnection,
+) -> dict[str, str]:
+    """Build a chunk_id → chunk_text lookup for context extraction."""
+    rows = con.execute(
+        "SELECT chunk_id, text FROM chunks WHERE run_id = ?", [run_id],
+    ).fetchall()
+    return {r[0]: r[1] for r in rows}
+
+
+def _attach_contexts(
+    entities: list[dict], chunk_texts: dict[str, str],
+) -> None:
+    """Attach context windows to each entity's primary mention in place."""
+    for e in entities:
+        chunk_text = chunk_texts.get(e["chunk_id"], "")
+        e["context"] = extract_context(chunk_text, e["char_start"], e["char_end"])
