@@ -6,7 +6,7 @@
     },
     "predictions": [
       {
-        "model_version": "llm-preannotation-v1-cleaned",
+        "model_version": "llm-preannotation-v2-cleaned",
         "result": [
           {
             "id": "r0",
@@ -147,6 +147,62 @@
                 "ITEM"
               ]
             }
+          },
+          {
+            "id": "r10",
+            "from_name": "label",
+            "to_name": "text",
+            "type": "labels",
+            "value": {
+              "start": 813,
+              "end": 845,
+              "text": "ringformet flekk av hvit stearin",
+              "labels": [
+                "ITEM"
+              ]
+            }
+          },
+          {
+            "id": "r11",
+            "from_name": "label",
+            "to_name": "text",
+            "type": "labels",
+            "value": {
+              "start": 712,
+              "end": 744,
+              "text": "Teppefibrene bar rester av væske",
+              "labels": [
+                "ITEM"
+              ]
+            }
+          },
+          {
+            "id": "r12",
+            "from_name": "label",
+            "to_name": "text",
+            "type": "labels",
+            "value": {
+              "start": 1723,
+              "end": 1730,
+              "text": "fiberen",
+              "labels": [
+                "ITEM"
+              ]
+            }
+          },
+          {
+            "id": "r13",
+            "from_name": "label",
+            "to_name": "text",
+            "type": "labels",
+            "value": {
+              "start": 909,
+              "end": 919,
+              "text": "kasserolle",
+              "labels": [
+                "ITEM"
+              ]
+            }
           }
         ]
       }
@@ -159,7 +215,7 @@
     },
     "predictions": [
       {
-        "model_version": "llm-preannotation-v1-cleaned",
+        "model_version": "llm-preannotation-v2-cleaned",
         "result": [
           {
             "id": "r0",
@@ -370,6 +426,104 @@
                 "PER"
               ]
             }
+          },
+          {
+            "id": "r15",
+            "from_name": "label",
+            "to_name": "text",
+            "type": "labels",
+            "value": {
+              "start": 1189,
+              "end": 1193,
+              "text": "John",
+              "labels": [
+                "PER"
+              ]
+            }
+          },
+          {
+            "id": "r16",
+            "from_name": "label",
+            "to_name": "text",
+            "type": "labels",
+            "value": {
+              "start": 1329,
+              "end": 1334,
+              "text": "Denby",
+              "labels": [
+                "PER"
+              ]
+            }
+          },
+          {
+            "id": "r17",
+            "from_name": "label",
+            "to_name": "text",
+            "type": "labels",
+            "value": {
+              "start": 1336,
+              "end": 1340,
+              "text": "John",
+              "labels": [
+                "PER"
+              ]
+            }
+          },
+          {
+            "id": "r18",
+            "from_name": "label",
+            "to_name": "text",
+            "type": "labels",
+            "value": {
+              "start": 1381,
+              "end": 1387,
+              "text": "Alfred",
+              "labels": [
+                "PER"
+              ]
+            }
+          },
+          {
+            "id": "r19",
+            "from_name": "label",
+            "to_name": "text",
+            "type": "labels",
+            "value": {
+              "start": 1570,
+              "end": 1574,
+              "text": "John",
+              "labels": [
+                "PER"
+              ]
+            }
+          },
+          {
+            "id": "r20",
+            "from_name": "label",
+            "to_name": "text",
+            "type": "labels",
+            "value": {
+              "start": 1732,
+              "end": 1738,
+              "text": "Howard",
+              "labels": [
+                "PER"
+              ]
+            }
+          },
+          {
+            "id": "r21",
+            "from_name": "label",
+            "to_name": "text",
+            "type": "labels",
+            "value": {
+              "start": 996,
+              "end": 1004,
+              "text": "Lawrence",
+              "labels": [
+                "PER"
+              ]
+            }
           }
         ]
       }
@@ -382,7 +536,7 @@
     },
     "predictions": [
       {
-        "model_version": "llm-preannotation-v1-cleaned",
+        "model_version": "llm-preannotation-v2-cleaned",
         "result": [
           {
             "id": "r0",
@@ -719,6 +873,90 @@
                 "FIN"
               ]
             }
+          },
+          {
+            "id": "r24",
+            "from_name": "label",
+            "to_name": "text",
+            "type": "labels",
+            "value": {
+              "start": 1131,
+              "end": 1136,
+              "text": "Denby",
+              "labels": [
+                "PER"
+              ]
+            }
+          },
+          {
+            "id": "r25",
+            "from_name": "label",
+            "to_name": "text",
+            "type": "labels",
+            "value": {
+              "start": 1778,
+              "end": 1788,
+              "text": "Inglethorp",
+              "labels": [
+                "PER"
+              ]
+            }
+          },
+          {
+            "id": "r26",
+            "from_name": "label",
+            "to_name": "text",
+            "type": "labels",
+            "value": {
+              "start": 2036,
+              "end": 2046,
+              "text": "Inglethorp",
+              "labels": [
+                "PER"
+              ]
+            }
+          },
+          {
+            "id": "r27",
+            "from_name": "label",
+            "to_name": "text",
+            "type": "labels",
+            "value": {
+              "start": 2463,
+              "end": 2467,
+              "text": "Japp",
+              "labels": [
+                "PER"
+              ]
+            }
+          },
+          {
+            "id": "r28",
+            "from_name": "label",
+            "to_name": "text",
+            "type": "labels",
+            "value": {
+              "start": 2494,
+              "end": 2502,
+              "text": "Meredith",
+              "labels": [
+                "PER"
+              ]
+            }
+          },
+          {
+            "id": "r29",
+            "from_name": "label",
+            "to_name": "text",
+            "type": "labels",
+            "value": {
+              "start": 1257,
+              "end": 1267,
+              "text": "Inglethorp",
+              "labels": [
+                "PER"
+              ]
+            }
           }
         ]
       }
@@ -731,7 +969,7 @@
     },
     "predictions": [
       {
-        "model_version": "llm-preannotation-v1-cleaned",
+        "model_version": "llm-preannotation-v2-cleaned",
         "result": [
           {
             "id": "r0",
@@ -1040,6 +1278,48 @@
                 "ORG"
               ]
             }
+          },
+          {
+            "id": "r22",
+            "from_name": "label",
+            "to_name": "text",
+            "type": "labels",
+            "value": {
+              "start": 1002,
+              "end": 1006,
+              "text": "John",
+              "labels": [
+                "PER"
+              ]
+            }
+          },
+          {
+            "id": "r23",
+            "from_name": "label",
+            "to_name": "text",
+            "type": "labels",
+            "value": {
+              "start": 1705,
+              "end": 1712,
+              "text": "Wilkins",
+              "labels": [
+                "PER"
+              ]
+            }
+          },
+          {
+            "id": "r24",
+            "from_name": "label",
+            "to_name": "text",
+            "type": "labels",
+            "value": {
+              "start": 1480,
+              "end": 1487,
+              "text": "stearin",
+              "labels": [
+                "ITEM"
+              ]
+            }
           }
         ]
       }
@@ -1052,7 +1332,7 @@
     },
     "predictions": [
       {
-        "model_version": "llm-preannotation-v1-cleaned",
+        "model_version": "llm-preannotation-v2-cleaned",
         "result": [
           {
             "id": "r0",
@@ -1303,6 +1583,90 @@
               "text": "Arh_Hast@gmail.com",
               "labels": [
                 "COMM"
+              ]
+            }
+          },
+          {
+            "id": "r18",
+            "from_name": "label",
+            "to_name": "text",
+            "type": "labels",
+            "value": {
+              "start": 954,
+              "end": 962,
+              "text": "Lawrence",
+              "labels": [
+                "PER"
+              ]
+            }
+          },
+          {
+            "id": "r19",
+            "from_name": "label",
+            "to_name": "text",
+            "type": "labels",
+            "value": {
+              "start": 1133,
+              "end": 1139,
+              "text": "Alfred",
+              "labels": [
+                "PER"
+              ]
+            }
+          },
+          {
+            "id": "r20",
+            "from_name": "label",
+            "to_name": "text",
+            "type": "labels",
+            "value": {
+              "start": 1261,
+              "end": 1269,
+              "text": "Hastings",
+              "labels": [
+                "PER"
+              ]
+            }
+          },
+          {
+            "id": "r21",
+            "from_name": "label",
+            "to_name": "text",
+            "type": "labels",
+            "value": {
+              "start": 1499,
+              "end": 1507,
+              "text": "Hastings",
+              "labels": [
+                "PER"
+              ]
+            }
+          },
+          {
+            "id": "r22",
+            "from_name": "label",
+            "to_name": "text",
+            "type": "labels",
+            "value": {
+              "start": 614,
+              "end": 626,
+              "text": "Styles Court",
+              "labels": [
+                "LOC"
+              ]
+            }
+          },
+          {
+            "id": "r23",
+            "from_name": "label",
+            "to_name": "text",
+            "type": "labels",
+            "value": {
+              "start": 1329,
+              "end": 1333,
+              "text": "kopp",
+              "labels": [
+                "ITEM"
               ]
             }
           }
