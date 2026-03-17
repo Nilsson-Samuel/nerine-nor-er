@@ -11,6 +11,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
+from src.matching.writer import get_scored_pairs_output_path
 from src.resolution.clustering import (
     PAIR_COLUMNS,
     SolvedComponent,
@@ -24,9 +25,9 @@ from src.resolution.confidence import (
     routing_actions_by_profile,
 )
 from src.resolution.run import (
-    RESOLUTION_COMPONENTS_FILENAME,
-    RESOLUTION_DIAGNOSTICS_FILENAME,
     _suspicious_missed_merge_examples,
+    get_resolution_components_path,
+    get_resolution_diagnostics_path,
     run_resolution,
 )
 from src.shared import schemas
@@ -192,6 +193,8 @@ def test_run_resolution_emits_cluster_confidence_and_suspicion_diagnostics(
         _build_entities_table("run_resolution", [a, b, c, d, e, f]),
         tmp_path / "entities.parquet",
     )
+    scored_pairs_path = get_scored_pairs_output_path(tmp_path, "run_resolution")
+    scored_pairs_path.parent.mkdir(parents=True, exist_ok=True)
     pq.write_table(
         _build_scored_pairs_table(
             [
@@ -202,12 +205,16 @@ def test_run_resolution_emits_cluster_confidence_and_suspicion_diagnostics(
                 ("run_resolution", d, f, 0.95),
             ]
         ),
-        tmp_path / "scored_pairs.parquet",
+        scored_pairs_path,
     )
 
     diagnostics = run_resolution(tmp_path, "run_resolution")
-    components_payload = json.loads((tmp_path / RESOLUTION_COMPONENTS_FILENAME).read_text())
-    diagnostics_payload = json.loads((tmp_path / RESOLUTION_DIAGNOSTICS_FILENAME).read_text())
+    components_payload = json.loads(
+        get_resolution_components_path(tmp_path, "run_resolution").read_text()
+    )
+    diagnostics_payload = json.loads(
+        get_resolution_diagnostics_path(tmp_path, "run_resolution").read_text()
+    )
 
     assert diagnostics == diagnostics_payload
     assert components_payload["cluster_count"] == 3

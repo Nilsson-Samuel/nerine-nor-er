@@ -15,6 +15,7 @@ import networkx as nx
 import polars as pl
 import pyarrow.parquet as pq
 
+from src.matching.writer import get_scored_pairs_output_path
 from src.shared import schemas
 from src.shared.config import (
     KEEP_SCORE_THRESHOLD,
@@ -103,9 +104,16 @@ def make_component_id(entity_ids: tuple[str, ...] | list[str]) -> str:
 
 
 def load_scored_pairs(data_dir: Path | str, run_id: str) -> pl.DataFrame:
-    """Load one run from scored_pairs.parquet in deterministic pair order."""
+    """Load one run from the per-run scored-pairs output in deterministic pair order."""
     data_dir = Path(data_dir)
-    table = pq.read_table(data_dir / "scored_pairs.parquet")
+    scored_pairs_path = get_scored_pairs_output_path(data_dir, run_id)
+    if not scored_pairs_path.exists():
+        raise ValueError(
+            f"missing scored pairs for run_id={run_id} at {scored_pairs_path}; "
+            "rerun matching scoring for this run"
+        )
+
+    table = pq.read_table(scored_pairs_path)
     errors = schemas.validate_contract_rules(table, "scored_pairs")
     if errors:
         raise ValueError(f"scored_pairs failed contract validation: {errors}")

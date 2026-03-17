@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from src.matching.writer import get_matching_run_output_dir
 from src.resolution.clustering import (
     ComponentState,
     SolvedComponent,
@@ -28,13 +29,30 @@ from src.resolution.confidence import (
 from src.shared.config import OBJECTIVE_NEUTRAL_THRESHOLD, ROUTING_PROFILE
 
 
+RESOLUTION_STAGE_DIRNAME = "resolution"
 RESOLUTION_COMPONENTS_FILENAME = "resolution_components.json"
 RESOLUTION_DIAGNOSTICS_FILENAME = "resolution_diagnostics.json"
 
 
 def _write_json(payload: dict[str, Any], path: Path) -> None:
     """Write one JSON artifact with stable formatting."""
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+
+
+def get_resolution_run_output_dir(data_dir: Path | str, run_id: str) -> Path:
+    """Build the per-run resolution output directory."""
+    return get_matching_run_output_dir(data_dir, run_id).parent / RESOLUTION_STAGE_DIRNAME
+
+
+def get_resolution_components_path(data_dir: Path | str, run_id: str) -> Path:
+    """Build the per-run resolution components JSON path."""
+    return get_resolution_run_output_dir(data_dir, run_id) / RESOLUTION_COMPONENTS_FILENAME
+
+
+def get_resolution_diagnostics_path(data_dir: Path | str, run_id: str) -> Path:
+    """Build the per-run resolution diagnostics JSON path."""
+    return get_resolution_run_output_dir(data_dir, run_id) / RESOLUTION_DIAGNOSTICS_FILENAME
 
 
 def _make_cluster_rows(
@@ -243,6 +261,8 @@ def run_resolution(data_dir: Path | str, run_id: str) -> dict[str, Any]:
     """Run retained-component clustering and persist resolution diagnostics."""
     data_dir = Path(data_dir)
     data_dir.mkdir(parents=True, exist_ok=True)
+    components_path = get_resolution_components_path(data_dir, run_id)
+    diagnostics_path = get_resolution_diagnostics_path(data_dir, run_id)
 
     entity_ids = load_entity_ids(data_dir, run_id)
     scored_pairs = load_scored_pairs(data_dir, run_id)
@@ -263,6 +283,6 @@ def run_resolution(data_dir: Path | str, run_id: str) -> dict[str, Any]:
         "clusters": cluster_rows,
     }
 
-    _write_json(component_payload, data_dir / RESOLUTION_COMPONENTS_FILENAME)
-    _write_json(diagnostics, data_dir / RESOLUTION_DIAGNOSTICS_FILENAME)
+    _write_json(component_payload, components_path)
+    _write_json(diagnostics, diagnostics_path)
     return diagnostics

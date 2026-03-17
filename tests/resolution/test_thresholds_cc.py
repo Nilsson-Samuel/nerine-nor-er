@@ -11,14 +11,15 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
+from src.matching.writer import get_scored_pairs_output_path
 from src.resolution.clustering import (
     build_phase1_components,
     include_edge,
     make_component_id,
 )
 from src.resolution.run import (
-    RESOLUTION_COMPONENTS_FILENAME,
-    RESOLUTION_DIAGNOSTICS_FILENAME,
+    get_resolution_components_path,
+    get_resolution_diagnostics_path,
     run_resolution,
 )
 from src.shared import schemas
@@ -180,14 +181,22 @@ def test_run_resolution_writes_component_and_diagnostic_artifacts(tmp_path: Path
             ("run_resolution", c, d, 0.92),
         ]
     )
-    pq.write_table(table, tmp_path / "scored_pairs.parquet")
+    scored_pairs_path = get_scored_pairs_output_path(tmp_path, "run_resolution")
+    scored_pairs_path.parent.mkdir(parents=True, exist_ok=True)
+    pq.write_table(table, scored_pairs_path)
 
     diagnostics = run_resolution(tmp_path, "run_resolution")
 
-    components_payload = json.loads((tmp_path / RESOLUTION_COMPONENTS_FILENAME).read_text())
-    diagnostics_payload = json.loads((tmp_path / RESOLUTION_DIAGNOSTICS_FILENAME).read_text())
+    components_payload = json.loads(
+        get_resolution_components_path(tmp_path, "run_resolution").read_text()
+    )
+    diagnostics_payload = json.loads(
+        get_resolution_diagnostics_path(tmp_path, "run_resolution").read_text()
+    )
 
     assert diagnostics == diagnostics_payload
+    assert not (tmp_path / "resolution_components.json").exists()
+    assert not (tmp_path / "resolution_diagnostics.json").exists()
     assert components_payload["run_id"] == "run_resolution"
     assert components_payload["component_count"] == 3
     assert [component["entity_ids"] for component in components_payload["components"]] == [
@@ -206,9 +215,11 @@ def test_run_resolution_raises_for_missing_run_id(tmp_path: Path) -> None:
         _build_entities_table("run_resolution", [a, b]),
         tmp_path / "entities.parquet",
     )
+    scored_pairs_path = get_scored_pairs_output_path(tmp_path, "run_resolution")
+    scored_pairs_path.parent.mkdir(parents=True, exist_ok=True)
     pq.write_table(
         _build_scored_pairs_table([("run_resolution", a, b, 0.90)]),
-        tmp_path / "scored_pairs.parquet",
+        scored_pairs_path,
     )
 
     with pytest.raises(ValueError, match="run_id not found in entities.parquet"):
