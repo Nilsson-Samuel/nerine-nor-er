@@ -13,6 +13,7 @@ import pyarrow.parquet as pq
 import pytest
 
 from src.matching.run import FEATURE_COLUMNS, FEATURE_OUTPUT_COLUMNS, run_features
+from src.matching.writer import get_features_output_path
 from src.shared import schemas
 from src.synthetic.build_matching_dataset import (
     LABELS_SCHEMA,
@@ -274,9 +275,10 @@ def test_load_labeled_feature_matrix_has_zero_row_loss(
 ) -> None:
     data_dir, run_id = synthetic_data_dir
     labels = pl.read_parquet(data_dir / "labels.parquet").filter(pl.col("run_id") == run_id)
+    run_features(data_dir, run_id)
 
     x_matrix, y_vector = load_labeled_feature_matrix(data_dir, run_id)
-    features = pl.read_parquet(data_dir / "features.parquet").filter(pl.col("run_id") == run_id)
+    features = pl.read_parquet(get_features_output_path(data_dir, run_id))
     joined = features.join(labels, on=["run_id", "entity_id_a", "entity_id_b"], how="inner")
 
     assert x_matrix.columns == FEATURE_COLUMNS
@@ -290,9 +292,25 @@ def test_load_labeled_feature_matrix_rejects_duplicate_feature_keys(
     data_dir, run_id = synthetic_data_dir
     features = run_features(data_dir, run_id)
     corrupted = pl.concat([features.slice(0, 1), features.slice(0, 1), features.slice(2)])
-    corrupted.write_parquet(data_dir / "features.parquet")
+    corrupted.write_parquet(get_features_output_path(data_dir, run_id))
 
     with pytest.raises(ValueError, match="features.parquet contains duplicate pair keys"):
+        load_labeled_feature_matrix(data_dir, run_id)
+
+
+def test_load_labeled_feature_matrix_requires_per_run_features_output(
+    synthetic_data_dir: tuple[Path, str],
+) -> None:
+    data_dir, run_id = synthetic_data_dir
+    features_path = get_features_output_path(data_dir, run_id)
+
+    run_features(data_dir, run_id)
+    features_path.unlink()
+
+    with pytest.raises(
+        ValueError,
+        match="missing matching features for run_id=.*rerun matching features for this run",
+    ):
         load_labeled_feature_matrix(data_dir, run_id)
 
 
@@ -311,7 +329,7 @@ def test_load_labeled_feature_matrix_rejects_missing_feature_keys_even_when_row_
         .otherwise(pl.col("entity_id_b"))
         .alias("entity_id_b"),
     ).drop("row_idx")
-    corrupted.write_parquet(data_dir / "features.parquet")
+    corrupted.write_parquet(get_features_output_path(data_dir, run_id))
 
     with pytest.raises(ValueError, match="features.parquet is missing keys from labels.parquet"):
         load_labeled_feature_matrix(data_dir, run_id)

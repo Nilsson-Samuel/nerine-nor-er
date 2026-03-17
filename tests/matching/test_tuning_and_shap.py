@@ -15,7 +15,11 @@ from src.matching.run import run_features, run_scoring
 from src.matching.reranker import save_lightgbm_artifacts, train_lightgbm
 from src.matching.shap_explain import format_shap_top5
 from src.matching.tuning import BEST_PARAMS_FILENAME, run_optuna_study, split_labeled_feature_matrix
-from src.matching.writer import SCORING_METADATA_FILENAME
+from src.matching.writer import (
+    get_matching_run_output_dir,
+    get_scoring_metadata_path,
+    get_scored_pairs_output_path,
+)
 from src.shared import schemas
 from src.synthetic.build_matching_dataset import build_matching_dataset, load_labeled_feature_matrix
 
@@ -88,8 +92,8 @@ def scoring_data_dir(tmp_path: Path) -> tuple[Path, str]:
     return data_dir, _IDENTITY_GROUPS_PAYLOAD["run_id"]
 
 
-def _load_scoring_metadata(data_dir: Path) -> dict:
-    return json.loads((data_dir / SCORING_METADATA_FILENAME).read_text(encoding="utf-8"))
+def _load_scoring_metadata(data_dir: Path, run_id: str) -> dict:
+    return json.loads(get_scoring_metadata_path(data_dir, run_id).read_text(encoding="utf-8"))
 
 
 def _assert_shap_contract(row: list[dict]) -> None:
@@ -122,7 +126,7 @@ def test_run_scoring_disabled_hooks_keep_empty_shap_and_write_metadata(
         run_id,
         scored_at=datetime(2026, 3, 9, 12, 0, tzinfo=timezone.utc),
     )
-    metadata = _load_scoring_metadata(data_dir)
+    metadata = _load_scoring_metadata(data_dir, run_id)
 
     assert all(row == [] for row in scored["shap_top5"].to_list())
     assert metadata["params_used"] == "baseline"
@@ -147,9 +151,9 @@ def test_run_scoring_with_shap_enabled_produces_contract_safe_top5(
         enable_shap=True,
         shap_max_rows=3,
     )
-    scored_table = pq.read_table(data_dir / "scored_pairs.parquet")
+    scored_table = pq.read_table(get_scored_pairs_output_path(data_dir, run_id))
     candidate_table = pq.read_table(data_dir / "candidate_pairs.parquet")
-    metadata = _load_scoring_metadata(data_dir)
+    metadata = _load_scoring_metadata(data_dir, run_id)
 
     assert schemas.validate_contract_rules(
         scored_table,
@@ -183,7 +187,7 @@ def test_run_scoring_with_shap_max_rows_zero_writes_empty_explanations(
         enable_shap=True,
         shap_max_rows=0,
     )
-    metadata = _load_scoring_metadata(data_dir)
+    metadata = _load_scoring_metadata(data_dir, run_id)
 
     assert all(row == [] for row in scored["shap_top5"].to_list())
     assert metadata["shap"] == {
@@ -207,14 +211,14 @@ def test_run_scoring_tuning_smoke_records_metadata_without_best_params_artifact(
         tuning_mode="smoke",
         tuning_trials=2,
     )
-    metadata = _load_scoring_metadata(data_dir)
+    metadata = _load_scoring_metadata(data_dir, run_id)
 
     assert metadata["tuning"]["enabled"] is True
     assert metadata["tuning"]["status"] == "completed"
     assert metadata["tuning"]["mode"] == "smoke"
     assert metadata["tuning"]["n_trials_requested"] == 2
     assert metadata["tuning"]["best_params_artifact_written"] is False
-    assert not (data_dir / BEST_PARAMS_FILENAME).exists()
+    assert not (get_matching_run_output_dir(data_dir, run_id) / BEST_PARAMS_FILENAME).exists()
 
 
 def test_non_trivial_optuna_study_writes_best_params_artifact(
@@ -270,7 +274,7 @@ def test_run_scoring_tuning_skips_when_labels_exist_only_for_other_runs(
         tuning_mode="smoke",
         tuning_trials=2,
     )
-    metadata = _load_scoring_metadata(data_dir)
+    metadata = _load_scoring_metadata(data_dir, run_id)
 
     assert metadata["tuning"]["enabled"] is True
     assert metadata["tuning"]["status"] == "skipped_no_labels"
