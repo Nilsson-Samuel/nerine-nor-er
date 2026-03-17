@@ -12,6 +12,7 @@ import pytest
 
 from src.matching.run import run_features, run_scoring
 from src.matching.reranker import save_lightgbm_artifacts, train_lightgbm
+from src.matching.writer import get_features_output_path, get_scored_pairs_output_path
 from src.shared import schemas
 from src.synthetic.build_matching_dataset import build_matching_dataset, load_labeled_feature_matrix
 
@@ -89,7 +90,8 @@ def test_run_scoring_writes_scored_pairs_parquet(scoring_data_dir: tuple[Path, s
         scored_at=datetime(2026, 3, 9, 12, 0, tzinfo=timezone.utc),
     )
 
-    assert (data_dir / "scored_pairs.parquet").exists()
+    assert get_scored_pairs_output_path(data_dir, run_id).exists()
+    assert not (data_dir / "scored_pairs.parquet").exists()
 
 
 def test_scored_pairs_output_matches_contract(scoring_data_dir: tuple[Path, str]) -> None:
@@ -97,7 +99,7 @@ def test_scored_pairs_output_matches_contract(scoring_data_dir: tuple[Path, str]
     scored_at = datetime(2026, 3, 9, 12, 0, tzinfo=timezone.utc)
 
     scored = run_scoring(data_dir, run_id, scored_at=scored_at)
-    scored_table = pq.read_table(data_dir / "scored_pairs.parquet")
+    scored_table = pq.read_table(get_scored_pairs_output_path(data_dir, run_id))
     candidate_table = pq.read_table(data_dir / "candidate_pairs.parquet")
 
     assert scored.columns == [
@@ -148,7 +150,7 @@ def test_scored_pairs_contract_requires_all_candidate_pairs_to_be_scored(
         scored_at=datetime(2026, 3, 9, 12, 0, tzinfo=timezone.utc),
     )
 
-    scored_table = pq.read_table(data_dir / "scored_pairs.parquet")
+    scored_table = pq.read_table(get_scored_pairs_output_path(data_dir, run_id))
     candidate_table = pq.read_table(data_dir / "candidate_pairs.parquet")
 
     truncated_scored_table = scored_table.slice(0, scored_table.num_rows - 1)
@@ -159,3 +161,21 @@ def test_scored_pairs_contract_requires_all_candidate_pairs_to_be_scored(
     )
 
     assert any("candidate_pairs row is missing from scored_pairs" in error for error in errors)
+
+
+def test_run_scoring_requires_per_run_features_output(
+    scoring_data_dir: tuple[Path, str],
+) -> None:
+    data_dir, run_id = scoring_data_dir
+    features_path = get_features_output_path(data_dir, run_id)
+    features_path.unlink()
+
+    with pytest.raises(
+        ValueError,
+        match="missing matching features for run_id=.*rerun matching features for this run",
+    ):
+        run_scoring(
+            data_dir,
+            run_id,
+            scored_at=datetime(2026, 3, 9, 12, 0, tzinfo=timezone.utc),
+        )

@@ -438,15 +438,16 @@ def build_matching_dataset(
 
 
 def _load_existing_features(data_dir: Path, run_id: str) -> pl.DataFrame | None:
-    """Load features.parquet for one run when it already exists."""
-    features_path = data_dir / "features.parquet"
-    if not features_path.exists():
-        return None
+    """Load one run from the per-run features output."""
+    from src.matching.writer import get_features_output_path
 
-    features = pl.read_parquet(features_path).filter(pl.col("run_id") == run_id)
-    if features.is_empty():
-        return None
-    return features
+    features_path = get_features_output_path(data_dir, run_id)
+    if features_path.exists():
+        return pl.read_parquet(features_path)
+    raise ValueError(
+        f"missing matching features for run_id={run_id} at {features_path}; "
+        "rerun matching features for this run"
+    )
 
 
 def _raise_if_duplicate_pair_keys(frame: pl.DataFrame, file_name: str) -> None:
@@ -487,7 +488,7 @@ def load_labeled_feature_matrix(
     data_dir: Path | str,
     run_id: str,
 ) -> tuple[pl.DataFrame, pl.Series]:
-    """Load or build a labeled feature matrix for synthetic-model training.
+    """Load a labeled feature matrix for synthetic-model training.
 
     Args:
         data_dir: Directory containing synthetic matching artifacts.
@@ -498,17 +499,13 @@ def load_labeled_feature_matrix(
         contains the aligned binary labels.
 
     Raises:
-        ValueError: If joining features and labels loses rows.
+        ValueError: If the per-run features output is missing or labels do not align.
     """
     data_dir = Path(data_dir)
 
-    features = _load_existing_features(data_dir, run_id)
-    if features is None:
-        from src.matching.run import FEATURE_COLUMNS, run_features
+    from src.matching.run import FEATURE_COLUMNS
 
-        features = run_features(data_dir, run_id)
-    else:
-        from src.matching.run import FEATURE_COLUMNS
+    features = _load_existing_features(data_dir, run_id)
 
     labels = pl.read_parquet(data_dir / "labels.parquet").filter(pl.col("run_id") == run_id)
     _raise_if_pair_keys_mismatch(features, labels)

@@ -1,5 +1,6 @@
 """Parquet writers for intermediate matching artifacts."""
 
+import base64
 import json
 from collections.abc import Mapping
 from datetime import datetime, timezone
@@ -13,7 +14,43 @@ import pyarrow.parquet as pq
 from src.shared.schemas import SCORED_PAIRS_SCHEMA
 
 
+RUN_OUTPUTS_DIRNAME = "runs"
+MATCHING_STAGE_DIRNAME = "matching"
+STRING_FEATURES_FILENAME = "string_features.parquet"
+FEATURES_FILENAME = "features.parquet"
+SCORED_PAIRS_FILENAME = "scored_pairs.parquet"
 SCORING_METADATA_FILENAME = "matching_scoring_metadata.json"
+
+
+def _encode_run_id_path_segment(run_id: str) -> str:
+    """Encode run_id into one cross-platform-safe directory name."""
+    encoded = base64.urlsafe_b64encode(run_id.encode("utf-8")).decode("ascii").rstrip("=")
+    return f"rid_{encoded}"
+
+
+def get_matching_run_output_dir(data_dir: Path | str, run_id: str) -> Path:
+    """Build the per-run matching output directory."""
+    return (
+        Path(data_dir)
+        / RUN_OUTPUTS_DIRNAME
+        / _encode_run_id_path_segment(run_id)
+        / MATCHING_STAGE_DIRNAME
+    )
+
+
+def get_features_output_path(data_dir: Path | str, run_id: str) -> Path:
+    """Build the per-run features parquet path."""
+    return get_matching_run_output_dir(data_dir, run_id) / FEATURES_FILENAME
+
+
+def get_scored_pairs_output_path(data_dir: Path | str, run_id: str) -> Path:
+    """Build the per-run scored-pairs parquet path."""
+    return get_matching_run_output_dir(data_dir, run_id) / SCORED_PAIRS_FILENAME
+
+
+def get_scoring_metadata_path(data_dir: Path | str, run_id: str) -> Path:
+    """Build the per-run scoring metadata path."""
+    return get_matching_run_output_dir(data_dir, run_id) / SCORING_METADATA_FILENAME
 
 
 def write_string_features(df: pl.DataFrame, out_dir: Path) -> None:
@@ -26,7 +63,7 @@ def write_string_features(df: pl.DataFrame, out_dir: Path) -> None:
     """
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    df.write_parquet(out_dir / "string_features.parquet")
+    df.write_parquet(out_dir / STRING_FEATURES_FILENAME)
 
 
 def write_features(df: pl.DataFrame, out_dir: Path) -> None:
@@ -38,7 +75,7 @@ def write_features(df: pl.DataFrame, out_dir: Path) -> None:
     """
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    df.write_parquet(out_dir / "features.parquet")
+    df.write_parquet(out_dir / FEATURES_FILENAME)
 
 
 def _coerce_scored_at(scored_at: datetime) -> datetime:
@@ -89,7 +126,7 @@ def write_scored_pairs(table: pa.Table, out_dir: Path) -> None:
     """Write scored pair output to scored_pairs.parquet."""
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    pq.write_table(table, out_dir / "scored_pairs.parquet")
+    pq.write_table(table, out_dir / SCORED_PAIRS_FILENAME)
 
 
 def write_scoring_metadata(metadata: Mapping[str, Any], out_dir: Path) -> None:
