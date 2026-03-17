@@ -1,12 +1,18 @@
-"""Phase-1 resolution orchestration for retained components, Pivot clustering, and diagnostics."""
+"""Phase-1 resolution orchestration for clustering, canonicalization, and final outputs."""
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
-from src.matching.writer import get_matching_run_output_dir
+import polars as pl
+import pyarrow.parquet as pq
+
+from src.matching.writer import get_scored_pairs_output_path
+from src.resolution.canonicalization import (
+    build_cluster_records,
+    build_resolved_entity_rows,
+)
 from src.resolution.clustering import (
     ComponentState,
     SolvedComponent,
@@ -14,8 +20,6 @@ from src.resolution.clustering import (
     _size_distribution,
     build_phase1_components,
     component_timing_rows,
-    load_entity_ids,
-    load_scored_pairs,
     solve_retained_components,
     summarize_components,
     summarize_timing_by_size_bucket,
@@ -27,32 +31,50 @@ from src.resolution.confidence import (
     routing_actions_by_profile,
 )
 from src.shared.config import OBJECTIVE_NEUTRAL_THRESHOLD, ROUTING_PROFILE
+from src.shared import schemas
+from src.resolution.writer import (
+    build_resolved_entities_table,
+    get_clusters_output_path,
+    get_resolution_components_path,
+    get_resolution_diagnostics_path,
+    get_resolved_entities_output_path,
+    write_resolution_json,
+    write_resolved_entities,
+)
 
 
-RESOLUTION_STAGE_DIRNAME = "resolution"
-RESOLUTION_COMPONENTS_FILENAME = "resolution_components.json"
-RESOLUTION_DIAGNOSTICS_FILENAME = "resolution_diagnostics.json"
+def _load_entities_frame(data_dir: Path | str, run_id: str) -> pl.DataFrame:
+    """Load one run from entities.parquet for clustering and lineage joins."""
+    table = pq.read_table(Path(data_dir) / "entities.parquet")
+    errors = schemas.validate_contract_rules(table, "entities")
+    if errors:
+        raise ValueError(f"entities failed contract validation: {errors}")
+
+    frame = pl.from_arrow(table).filter(pl.col("run_id") == run_id).sort("entity_id")
+    if frame.is_empty():
+        raise ValueError(f"run_id not found in entities.parquet: {run_id}")
+    return frame
 
 
-def _write_json(payload: dict[str, Any], path: Path) -> None:
-    """Write one JSON artifact with stable formatting."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+def _load_scored_pairs_frame(data_dir: Path | str, run_id: str) -> pl.DataFrame:
+    """Load one run from scored_pairs.parquet with full edge lineage columns."""
+    scored_pairs_path = get_scored_pairs_output_path(data_dir, run_id)
+    if not scored_pairs_path.exists():
+        raise ValueError(
+            f"missing scored pairs for run_id={run_id} at {scored_pairs_path}; "
+            "rerun matching scoring for this run"
+        )
 
+    table = pq.read_table(scored_pairs_path)
+    errors = schemas.validate_contract_rules(table, "scored_pairs")
+    if errors:
+        raise ValueError(f"scored_pairs failed contract validation: {errors}")
 
-def get_resolution_run_output_dir(data_dir: Path | str, run_id: str) -> Path:
-    """Build the per-run resolution output directory."""
-    return get_matching_run_output_dir(data_dir, run_id).parent / RESOLUTION_STAGE_DIRNAME
-
-
-def get_resolution_components_path(data_dir: Path | str, run_id: str) -> Path:
-    """Build the per-run resolution components JSON path."""
-    return get_resolution_run_output_dir(data_dir, run_id) / RESOLUTION_COMPONENTS_FILENAME
-
-
-def get_resolution_diagnostics_path(data_dir: Path | str, run_id: str) -> Path:
-    """Build the per-run resolution diagnostics JSON path."""
-    return get_resolution_run_output_dir(data_dir, run_id) / RESOLUTION_DIAGNOSTICS_FILENAME
+    return (
+        pl.from_arrow(table)
+        .filter(pl.col("run_id") == run_id)
+        .sort(["entity_id_a", "entity_id_b"])
+    )
 
 
 def _make_cluster_rows(
@@ -258,23 +280,37 @@ def _build_enriched_diagnostics(
 
 
 def run_resolution(data_dir: Path | str, run_id: str) -> dict[str, Any]:
-    """Run retained-component clustering and persist resolution diagnostics."""
+    """Run retained-component clustering and persist final resolution artifacts."""
     data_dir = Path(data_dir)
     data_dir.mkdir(parents=True, exist_ok=True)
     components_path = get_resolution_components_path(data_dir, run_id)
     diagnostics_path = get_resolution_diagnostics_path(data_dir, run_id)
+    resolved_entities_path = get_resolved_entities_output_path(data_dir, run_id)
+    clusters_path = get_clusters_output_path(data_dir, run_id)
 
-    entity_ids = load_entity_ids(data_dir, run_id)
-    scored_pairs = load_scored_pairs(data_dir, run_id)
+    entities = _load_entities_frame(data_dir, run_id)
+    scored_pairs = _load_scored_pairs_frame(data_dir, run_id)
+    entity_ids = entities.get_column("entity_id").to_list()
     components, phase1_diagnostics = build_phase1_components(run_id, scored_pairs, entity_ids)
     solved_components = solve_retained_components(components)
     cluster_rows = _make_cluster_rows(components, solved_components)
+    cluster_records = build_cluster_records(cluster_rows, entities, scored_pairs)
+    resolved_rows = build_resolved_entity_rows(cluster_records)
+    resolved_entities_table = build_resolved_entities_table(resolved_rows)
+    resolved_errors = schemas.validate_contract_rules(
+        resolved_entities_table,
+        "resolved_entities",
+    )
+    if resolved_errors:
+        raise ValueError(f"resolved_entities failed contract validation: {resolved_errors}")
+
     diagnostics = _build_enriched_diagnostics(
         phase1_diagnostics,
         components,
         solved_components,
         cluster_rows,
     )
+    diagnostics["resolved_entity_row_count"] = len(resolved_rows)
     component_payload = {
         "run_id": run_id,
         "component_count": len(components),
@@ -282,7 +318,14 @@ def run_resolution(data_dir: Path | str, run_id: str) -> dict[str, Any]:
         "components": summarize_components(components, solved_components),
         "clusters": cluster_rows,
     }
+    clusters_payload = {
+        "run_id": run_id,
+        "cluster_count": len(cluster_records),
+        "clusters": cluster_records,
+    }
 
-    _write_json(component_payload, components_path)
-    _write_json(diagnostics, diagnostics_path)
+    write_resolved_entities(resolved_entities_table, resolved_entities_path)
+    write_resolution_json(component_payload, components_path)
+    write_resolution_json(diagnostics, diagnostics_path)
+    write_resolution_json(clusters_payload, clusters_path)
     return diagnostics
