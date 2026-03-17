@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from src.matching.run import FEATURE_COLUMNS, run_features
+from src.matching.writer import get_features_output_path
 from src.shared.fixtures import DEFAULT_RUN_ID, write_mock_handoff
 
 
@@ -18,7 +19,7 @@ def handoff_dir(tmp_path: Path) -> Path:
 
 
 def test_run_features_writes_byte_identical_output_on_repeated_runs(handoff_dir: Path) -> None:
-    output_path = handoff_dir / "features.parquet"
+    output_path = get_features_output_path(handoff_dir, DEFAULT_RUN_ID)
 
     run_features(handoff_dir, DEFAULT_RUN_ID)
     first_bytes = output_path.read_bytes()

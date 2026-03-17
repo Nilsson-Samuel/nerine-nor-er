@@ -24,6 +24,8 @@ from src.matching.shap_explain import explain_lightgbm_top5
 from src.matching.tuning import build_tuning_summary, run_optuna_study
 from src.matching.writer import (
     build_scored_pairs_table,
+    get_features_output_path,
+    get_matching_run_output_dir,
     write_features,
     write_scored_pairs,
     write_scoring_metadata,
@@ -118,7 +120,7 @@ def _ensure_key_alignment(reference: pl.DataFrame, candidate: pl.DataFrame, name
 
 
 def run_features(data_dir: Path | str, run_id: str) -> pl.DataFrame:
-    """Run all feature groups and write features.parquet.
+    """Run all feature groups and write the per-run features parquet.
 
     Args:
         data_dir: Directory containing entities/candidate_pairs and embedding artifacts.
@@ -128,6 +130,7 @@ def run_features(data_dir: Path | str, run_id: str) -> pl.DataFrame:
         Feature table with pair key columns and 14 feature columns.
     """
     data_dir = Path(data_dir)
+    output_dir = get_matching_run_output_dir(data_dir, run_id)
     pairs_df = load_pairs_with_metadata(data_dir, run_id)
     artifacts = load_embedding_artifacts(data_dir)
 
@@ -149,18 +152,19 @@ def run_features(data_dir: Path | str, run_id: str) -> pl.DataFrame:
     _ensure_key_alignment(pairs_df, features_df, "final feature output")
     _log_feature_diagnostics(features_df)
 
-    write_features(features_df, data_dir)
+    write_features(features_df, output_dir)
     return features_df
 
 
 def _load_feature_rows(data_dir: Path, run_id: str) -> pl.DataFrame:
-    """Load one run from features.parquet, building it first when absent."""
-    features_path = data_dir / "features.parquet"
+    """Load one run from the per-run features output."""
+    features_path = get_features_output_path(data_dir, run_id)
     if features_path.exists():
-        features_df = pl.read_parquet(features_path).filter(pl.col("run_id") == run_id)
-        if not features_df.is_empty():
-            return features_df
-    return run_features(data_dir, run_id)
+        return pl.read_parquet(features_path)
+    raise ValueError(
+        f"missing matching features for run_id={run_id} at {features_path}; "
+        "rerun matching features for this run"
+    )
 
 
 def _load_candidate_pairs_for_scoring(data_dir: Path, run_id: str) -> pl.DataFrame:
@@ -192,6 +196,7 @@ def _load_labeled_feature_matrix_if_available(
 def _run_tuning_if_requested(
     data_dir: Path,
     run_id: str,
+    output_dir: Path,
     *,
     enable_tuning: bool,
     tuning_mode: str,
@@ -222,7 +227,7 @@ def _run_tuning_if_requested(
         enabled=True,
         mode=tuning_mode,
         n_trials=tuning_trials,
-        out_dir=data_dir,
+        out_dir=output_dir,
     )
 
 
@@ -264,8 +269,9 @@ def run_scoring(
     enable_shap: bool = False,
     shap_max_rows: int | None = None,
 ) -> pl.DataFrame:
-    """Run inference scoring and write scored_pairs.parquet for one run."""
+    """Run inference scoring and write per-run scored output for one run."""
     data_dir = Path(data_dir)
+    output_dir = get_matching_run_output_dir(data_dir, run_id)
     features_df = _load_feature_rows(data_dir, run_id)
     candidate_pairs_df = _load_candidate_pairs_for_scoring(data_dir, run_id)
     effective_scored_at = scored_at or datetime.now(timezone.utc)
@@ -276,6 +282,7 @@ def run_scoring(
     tuning_summary = _run_tuning_if_requested(
         data_dir,
         run_id,
+        output_dir,
         enable_tuning=enable_tuning,
         tuning_mode=tuning_mode,
         tuning_trials=tuning_trials,
@@ -304,7 +311,7 @@ def run_scoring(
     if validation_errors:
         raise ValueError("; ".join(validation_errors))
 
-    write_scored_pairs(table, data_dir)
+    write_scored_pairs(table, output_dir)
     explained_row_count = 0
     if enable_shap:
         explained_row_count = candidate_pairs_df.height if shap_max_rows is None else min(
@@ -321,6 +328,6 @@ def run_scoring(
             enable_shap=enable_shap,
             explained_row_count=explained_row_count,
         ),
-        data_dir,
+        output_dir,
     )
     return pl.from_arrow(table).select(SCORED_OUTPUT_COLUMNS)
