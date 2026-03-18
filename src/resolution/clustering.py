@@ -1,4 +1,21 @@
-"""Retained-graph clustering helpers for resolution diagnostics and Pivot solving."""
+"""Correlation-clustering helpers for the resolution stage.
+
+This module consumes same-entity probabilities from the matching stage
+(`scored_pairs.parquet`). Those scores come from the LightGBM reranker and are
+treated here as merge evidence between entity mentions.
+
+Resolution happens in two steps:
+1. Keep only pair scores at or above `KEEP_SCORE_THRESHOLD` and build retained
+   connected components. This keeps clearly implausible edges out of later
+   clustering work.
+2. Solve each retained component with Pivot correlation clustering. For that
+   objective, each retained edge score is shifted by
+   `OBJECTIVE_NEUTRAL_THRESHOLD`, so higher scores vote for merging and lower
+   retained scores vote for splitting.
+
+The outputs from this module are deterministic component states, clustering
+results, and diagnostics that explain how the threshold policy behaved.
+"""
 
 from __future__ import annotations
 
@@ -46,7 +63,13 @@ PAIR_COLUMNS = ["run_id", "entity_id_a", "entity_id_b", "score"]
 
 @dataclass(frozen=True, slots=True)
 class ComponentState:
-    """Deterministic local view of one retained connected component."""
+    """Deterministic local view of one retained connected component.
+
+    The component stores retained edge scores plus the shifted
+    correlation-clustering weights used by Pivot. `positive_neighbors` means
+    neighbors whose retained edge is above the neutral objective threshold and
+    therefore votes in favor of a merge.
+    """
 
     component_id: str
     entity_ids: tuple[str, ...]
@@ -89,7 +112,7 @@ def score_to_objective_weight(
     score: float,
     neutral_threshold: float = OBJECTIVE_NEUTRAL_THRESHOLD,
 ) -> float:
-    """Convert a same-entity probability into a correlation-clustering weight."""
+    """Convert a reranker probability into a correlation-clustering weight."""
     weight = float(score) - float(neutral_threshold)
     if abs(weight) <= MIN_OBJECTIVE_GAIN:
         return 0.0
@@ -151,7 +174,7 @@ def build_retained_graph(
     entity_ids: list[str] | tuple[str, ...],
     keep_threshold: float = KEEP_SCORE_THRESHOLD,
 ) -> nx.Graph:
-    """Build one graph over all run entities, keeping only thresholded edges."""
+    """Build one graph over all run entities, keeping only plausible merge edges."""
     graph = nx.Graph()
     graph.add_nodes_from(entity_ids)
 
@@ -257,7 +280,11 @@ def correlation_objective(
     component: ComponentState,
     clusters: tuple[tuple[str, ...], ...],
 ) -> float:
-    """Score one clustering over retained edges using weighted split-vs-merge evidence."""
+    """Score one clustering over retained edges using split-vs-merge evidence.
+
+    Positive weights reward placing both entities in the same cluster.
+    Negative weights reward keeping them apart.
+    """
     cluster_index: dict[str, int] = {}
     for index, cluster in enumerate(clusters):
         for entity_id in cluster:
@@ -276,15 +303,22 @@ def _pivot_once(
     component: ComponentState,
     rng: random.Random,
 ) -> tuple[tuple[str, ...], ...]:
-    """Run one randomized Pivot pass on local component structures."""
+    """Run one randomized Pivot pass for correlation clustering.
+
+    Pivot repeatedly picks one unassigned entity as the pivot node, then groups
+    it with the still-unassigned neighbors whose shifted objective weight is
+    positive. Different pivot orders can lead to different clusterings, which is
+    why the solver runs multiple deterministic restarts and keeps the best
+    objective value.
+    """
     remaining = list(component.entity_ids)
     remaining_set = set(remaining)
     clusters: list[tuple[str, ...]] = []
 
     while remaining:
-        pivot = remaining[rng.randrange(len(remaining))]
-        cluster_members = {pivot}
-        for neighbor in component.positive_neighbors[pivot]:
+        pivot_entity_id = remaining[rng.randrange(len(remaining))]
+        cluster_members = {pivot_entity_id}
+        for neighbor in component.positive_neighbors[pivot_entity_id]:
             if neighbor in remaining_set:
                 cluster_members.add(neighbor)
 
@@ -302,9 +336,9 @@ def _pivot_once_deterministic(component: ComponentState) -> tuple[tuple[str, ...
     clusters: list[tuple[str, ...]] = []
 
     while remaining:
-        pivot = remaining[0]
-        cluster_members = {pivot}
-        for neighbor in component.positive_neighbors[pivot]:
+        pivot_entity_id = remaining[0]
+        cluster_members = {pivot_entity_id}
+        for neighbor in component.positive_neighbors[pivot_entity_id]:
             if neighbor in remaining_set:
                 cluster_members.add(neighbor)
 
@@ -350,7 +384,12 @@ def solve_component_with_pivot(
     min_gain: float = MIN_OBJECTIVE_GAIN,
     base_seed: int = 0,
 ) -> SolvedComponent:
-    """Solve one retained component with deterministic multi-start Pivot."""
+    """Solve one retained component with deterministic multi-start Pivot.
+
+    This is explicitly Pivot correlation clustering, not a generic "pivot"
+    pattern. The solver compares several pivot orders and keeps the clustering
+    with the best correlation-clustering objective score.
+    """
     if component.is_trivial:
         return _solve_trivial_component(component)
 
