@@ -26,6 +26,9 @@ _LABEL_MAP: dict[str, str] = {
 _DEFAULT_MODEL = "NbAiLab/nb-bert-base-ner"
 
 # Singleton cache for the pipeline (heavy to load, reuse across calls).
+# NOTE: only caches one model — if called with a different model name after
+# the first load, the cached (first) model is returned silently.  Fine today
+# since only _DEFAULT_MODEL is used; revisit if fine-tuned model swap is added.
 _cached_pipeline: Any = None
 
 
