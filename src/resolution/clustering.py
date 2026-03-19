@@ -24,16 +24,11 @@ import random
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from math import ceil, sqrt
-from pathlib import Path
 from time import perf_counter
 from typing import Any
 
 import networkx as nx
 import polars as pl
-import pyarrow.parquet as pq
-
-from src.matching.writer import get_scored_pairs_output_path
-from src.shared import schemas
 from src.shared.config import (
     KEEP_SCORE_THRESHOLD,
     OBJECTIVE_NEUTRAL_THRESHOLD,
@@ -126,49 +121,6 @@ def make_component_id(entity_ids: tuple[str, ...] | list[str]) -> str:
     return hashlib.sha256(payload).hexdigest()[:32]
 
 
-def load_scored_pairs(data_dir: Path | str, run_id: str) -> pl.DataFrame:
-    """Load one run from the per-run scored-pairs output in deterministic pair order."""
-    data_dir = Path(data_dir)
-    scored_pairs_path = get_scored_pairs_output_path(data_dir, run_id)
-    if not scored_pairs_path.exists():
-        raise ValueError(
-            f"missing scored pairs for run_id={run_id} at {scored_pairs_path}; "
-            "rerun matching scoring for this run"
-        )
-
-    table = pq.read_table(scored_pairs_path)
-    errors = schemas.validate_contract_rules(table, "scored_pairs")
-    if errors:
-        raise ValueError(f"scored_pairs failed contract validation: {errors}")
-
-    return (
-        pl.from_arrow(table)
-        .filter(pl.col("run_id") == run_id)
-        .sort(["entity_id_a", "entity_id_b"])
-        .select(PAIR_COLUMNS)
-    )
-
-
-def load_entity_ids(data_dir: Path | str, run_id: str) -> list[str]:
-    """Load one run from entities.parquet and return deterministic entity IDs."""
-    data_dir = Path(data_dir)
-    table = pq.read_table(data_dir / "entities.parquet")
-    errors = schemas.validate_contract_rules(table, "entities")
-    if errors:
-        raise ValueError(f"entities failed contract validation: {errors}")
-
-    entity_ids = (
-        pl.from_arrow(table)
-        .filter(pl.col("run_id") == run_id)
-        .select("entity_id")
-        .get_column("entity_id")
-        .to_list()
-    )
-    if not entity_ids:
-        raise ValueError(f"run_id not found in entities.parquet: {run_id}")
-    return sorted(entity_ids)
-
-
 def build_retained_graph(
     scored_pairs: pl.DataFrame,
     entity_ids: list[str] | tuple[str, ...],
@@ -193,13 +145,13 @@ def build_retained_graph(
             f"{unknown_entity_ids[:5]}"
         )
 
-    for row in scored_pairs.iter_rows(named=True):
-        if include_edge(row["score"], keep_threshold):
-            graph.add_edge(
-                row["entity_id_a"],
-                row["entity_id_b"],
-                weight=float(row["score"]),
-            )
+    retained_pairs = scored_pairs.filter(pl.col("score") >= float(keep_threshold)).select(
+        ["entity_id_a", "entity_id_b", "score"]
+    )
+    if retained_pairs.is_empty():
+        return graph
+
+    graph.add_weighted_edges_from(retained_pairs.iter_rows())
     return graph
 
 

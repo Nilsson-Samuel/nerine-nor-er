@@ -14,6 +14,7 @@ import pytest
 from src.matching.writer import get_scored_pairs_output_path
 from src.resolution.clustering import (
     build_phase1_components,
+    build_retained_graph,
     include_edge,
     make_component_id,
 )
@@ -166,6 +167,43 @@ def test_build_phase1_components_keeps_entities_without_scored_pairs() -> None:
     assert diagnostics["total_node_count"] == 4
     assert diagnostics["singleton_node_count"] == 2
     assert diagnostics["singleton_rate"] == pytest.approx(0.5, abs=1e-6)
+
+
+def test_build_retained_graph_excludes_below_threshold_edges_and_keeps_known_nodes() -> None:
+    a, b, c = (_hex32(index) for index in range(1, 4))
+    scored_pairs = pl.from_arrow(
+        _build_scored_pairs_table(
+            [
+                ("run_resolution", a, b, 0.60),
+                ("run_resolution", b, c, 0.59),
+            ]
+        )
+    ).select(PAIR_COLUMNS)
+
+    graph = build_retained_graph(scored_pairs, [a, b, c])
+
+    assert sorted(graph.nodes()) == [a, b, c]
+    edges = sorted(graph.edges(data="weight"))
+    assert len(edges) == 1
+    assert edges[0][:2] == (a, b)
+    assert edges[0][2] == pytest.approx(0.60)
+    assert c in graph
+    assert graph.degree(c) == 0
+
+
+def test_build_retained_graph_raises_for_unknown_entities_even_below_threshold() -> None:
+    a, b, unknown = (_hex32(index) for index in range(1, 4))
+    scored_pairs = pl.from_arrow(
+        _build_scored_pairs_table(
+            [
+                ("run_resolution", a, b, 0.60),
+                ("run_resolution", b, unknown, 0.10),
+            ]
+        )
+    ).select(PAIR_COLUMNS)
+
+    with pytest.raises(ValueError, match="missing from entities.parquet"):
+        build_retained_graph(scored_pairs, [a, b])
 
 
 def test_run_resolution_writes_component_and_diagnostic_artifacts(tmp_path: Path) -> None:
