@@ -6,7 +6,7 @@ The resolution thresholds below describe three different decisions:
   an edge to enter the retained graph at all.
 - `OBJECTIVE_NEUTRAL_THRESHOLD`: the point inside correlation clustering where a
   retained edge stops being weak evidence and starts voting in favor of merging.
-- `REVIEW_CONFIDENCE_THRESHOLD`: post-clustering routing cutoff used for
+- `BASE_CONFIDENCE_REVIEW_THRESHOLD`: post-clustering routing cutoff used for
   reviewer-facing confidence handling. This does not change the graph or the
   clustering objective.
 """
@@ -32,6 +32,3 @@ BASE_CONFIDENCE_REVIEW_THRESHOLD = 0.50
 # output can support low-HITL and more review-heavy operation without changing
 # clustering.
 ROUTING_PROFILE = "quick_low_hitl"
-
-# Backward-compatible alias used by earlier resolution diagnostics.
-REVIEW_CONFIDENCE_THRESHOLD = BASE_CONFIDENCE_REVIEW_THRESHOLD

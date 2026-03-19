@@ -16,7 +16,7 @@ from src.resolution.canonicalization import (
 from src.resolution.clustering import (
     ComponentState,
     SolvedComponent,
-    _giant_component_warnings,
+    _giant_cluster_warnings,
     _size_distribution,
     build_phase1_components,
     component_timing_rows,
@@ -159,10 +159,14 @@ def _suspicious_merge_examples(
 def _suspicious_missed_merge_examples(
     components: list[ComponentState],
     solved_components: list[SolvedComponent],
+    cluster_rows: list[dict[str, Any]],
     limit: int = 10,
 ) -> list[dict[str, Any]]:
     """Return high-score retained edges that the clustering still split apart."""
     component_by_id = {component.component_id: component for component in components}
+    cluster_id_by_entity_ids = {
+        tuple(row["entity_ids"]): str(row["cluster_id"]) for row in cluster_rows
+    }
     examples: list[dict[str, Any]] = []
 
     for solved_component in solved_components:
@@ -170,7 +174,7 @@ def _suspicious_missed_merge_examples(
         cluster_index: dict[str, int] = {}
         cluster_ids: list[str] = []
         for cluster_number, cluster in enumerate(solved_component.clusters):
-            cluster_id = compute_base_confidence(cluster, component.edge_scores).cluster_id
+            cluster_id = cluster_id_by_entity_ids[tuple(cluster)]
             cluster_ids.append(cluster_id)
             for entity_id in cluster:
                 cluster_index[entity_id] = cluster_number
@@ -255,7 +259,7 @@ def _build_enriched_diagnostics(
                 round(cluster_singleton_count / len(cluster_rows), 6) if cluster_rows else 0.0
             ),
             "cluster_size_distribution": _size_distribution(cluster_sizes),
-            "giant_cluster_warnings": _giant_component_warnings(
+            "giant_cluster_warnings": _giant_cluster_warnings(
                 cluster_sizes,
                 diagnostics["total_node_count"],
             ),
@@ -271,6 +275,7 @@ def _build_enriched_diagnostics(
             "suspicious_missed_merges": _suspicious_missed_merge_examples(
                 components,
                 solved_components,
+                cluster_rows,
             ),
             "component_timings": timing_rows,
             "timing_by_size_bucket": summarize_timing_by_size_bucket(timing_rows),

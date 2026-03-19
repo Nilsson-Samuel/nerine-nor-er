@@ -15,8 +15,8 @@ import pyarrow as pa
 
 from src.shared.config import (
     BASE_CONFIDENCE_AUTO_MERGE_THRESHOLD,
+    BASE_CONFIDENCE_REVIEW_THRESHOLD,
     ROUTING_PROFILE,
-    REVIEW_CONFIDENCE_THRESHOLD,
 )
 from src.shared.validators import is_hex32, is_lower_trimmed_non_empty
 
@@ -985,7 +985,7 @@ def _expected_resolved_route_action(
         return "keep_separate"
     if confidence_value > BASE_CONFIDENCE_AUTO_MERGE_THRESHOLD:
         return "auto_merge"
-    if confidence_value >= REVIEW_CONFIDENCE_THRESHOLD:
+    if confidence_value >= BASE_CONFIDENCE_REVIEW_THRESHOLD:
         if ROUTING_PROFILE == "balanced_hitl":
             return "review"
         return "defer"

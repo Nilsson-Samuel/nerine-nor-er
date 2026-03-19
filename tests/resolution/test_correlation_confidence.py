@@ -25,6 +25,7 @@ from src.resolution.confidence import (
     routing_actions_by_profile,
 )
 from src.resolution.run import (
+    _make_cluster_rows,
     _suspicious_missed_merge_examples,
     get_resolution_components_path,
     get_resolution_diagnostics_path,
@@ -259,6 +260,11 @@ def test_suspicious_missed_merge_examples_excludes_neutral_edges() -> None:
         elapsed_ms=0.0,
     )
 
-    examples = _suspicious_missed_merge_examples(components, [solved_component])
+    cluster_rows = _make_cluster_rows(components, [solved_component])
+    examples = _suspicious_missed_merge_examples(
+        components,
+        [solved_component],
+        cluster_rows,
+    )
 
     assert examples == []

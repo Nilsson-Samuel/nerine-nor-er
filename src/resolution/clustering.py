@@ -30,9 +30,9 @@ from typing import Any
 import networkx as nx
 import polars as pl
 from src.shared.config import (
+    BASE_CONFIDENCE_REVIEW_THRESHOLD,
     KEEP_SCORE_THRESHOLD,
     OBJECTIVE_NEUTRAL_THRESHOLD,
-    REVIEW_CONFIDENCE_THRESHOLD,
 )
 
 
@@ -173,7 +173,11 @@ def build_component_state(
         key=lambda row: tuple(sorted((row[0], row[1]))),
     )
     for entity_id_a, entity_id_b, score in edge_rows:
-        edge_key = tuple(sorted((entity_id_a, entity_id_b)))
+        edge_key: tuple[str, str]
+        if entity_id_a <= entity_id_b:
+            edge_key = (entity_id_a, entity_id_b)
+        else:
+            edge_key = (entity_id_b, entity_id_a)
         edge_score = float(score)
         edge_scores[edge_key] = edge_score
         objective_weights[edge_key] = score_to_objective_weight(edge_score, neutral_threshold)
@@ -450,11 +454,12 @@ def _size_distribution(sizes: list[int]) -> dict[str, int]:
     return {str(size): counts[size] for size in sorted(counts)}
 
 
-def _giant_component_warnings(
+def _giant_size_warnings(
     sizes: list[int],
     total_node_count: int,
+    kind: str,
 ) -> list[dict[str, Any]]:
-    """Return giant-component warning records for retained-graph diagnostics."""
+    """Return warning records when one size bucket dominates the retained graph."""
     if not sizes or total_node_count == 0:
         return []
 
@@ -465,7 +470,7 @@ def _giant_component_warnings(
     if largest_size >= GIANT_COMPONENT_NODE_WARNING_SIZE:
         warnings.append(
             {
-                "code": "largest_component_node_count",
+                "code": f"largest_{kind}_node_count",
                 "value": largest_size,
                 "threshold": GIANT_COMPONENT_NODE_WARNING_SIZE,
             }
@@ -476,12 +481,28 @@ def _giant_component_warnings(
     ):
         warnings.append(
             {
-                "code": "largest_component_share",
+                "code": f"largest_{kind}_share",
                 "value": round(largest_share, 6),
                 "threshold": GIANT_COMPONENT_SHARE_WARNING,
             }
         )
     return warnings
+
+
+def _giant_component_warnings(
+    sizes: list[int],
+    total_node_count: int,
+) -> list[dict[str, Any]]:
+    """Return retained-component warning records for phase-1 diagnostics."""
+    return _giant_size_warnings(sizes, total_node_count, kind="component")
+
+
+def _giant_cluster_warnings(
+    sizes: list[int],
+    total_node_count: int,
+) -> list[dict[str, Any]]:
+    """Return resolved-cluster warning records for enriched diagnostics."""
+    return _giant_size_warnings(sizes, total_node_count, kind="cluster")
 
 
 def component_timing_rows(
@@ -573,7 +594,7 @@ def build_resolution_diagnostics(
         "thresholds": {
             "keep_score_threshold": keep_threshold,
             "objective_neutral_threshold": OBJECTIVE_NEUTRAL_THRESHOLD,
-            "review_confidence_threshold": REVIEW_CONFIDENCE_THRESHOLD,
+            "review_confidence_threshold": BASE_CONFIDENCE_REVIEW_THRESHOLD,
         },
         "threshold_note": "provisional placeholder thresholds; phase-1 diagnostics only",
     }
