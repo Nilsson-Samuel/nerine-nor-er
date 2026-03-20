@@ -155,6 +155,59 @@ def render_source_docs(
     )
 
 
+def render_cluster_graph(members: pl.DataFrame, edges: pl.DataFrame) -> None:
+    """Render an undirected Graphviz node-edge diagram of the cluster.
+
+    Nodes are labeled with entity surface text, edges are labeled with their
+    score. The weakest edge is highlighted in red/dashed to match the existing
+    weakest-link highlight in the edge table.
+    """
+    if members.is_empty():
+        return
+
+    # Build DOT string for an undirected graph
+    lines = ["graph cluster {", '  rankdir=LR;', '  node [shape=ellipse];']
+
+    for row in members.select("entity_id", "text").iter_rows(named=True):
+        eid = row["entity_id"]
+        label = row["text"].replace('"', '\\"')
+        lines.append(f'  "{eid}" [label="{label}"];')
+
+    if edges.is_empty():
+        # Singleton cluster — just render the node(s)
+        lines.append("}")
+        st.markdown("#### Cluster graph")
+        st.graphviz_chart("\n".join(lines))
+        return
+
+    weakest = find_weakest_edge(edges)
+    weakest_key = None
+    if weakest is not None:
+        weakest_key = (weakest["entity_id_a"], weakest["entity_id_b"])
+
+    for row in edges.iter_rows(named=True):
+        id_a = row["entity_id_a"]
+        id_b = row["entity_id_b"]
+        score_label = f'{row["score"]:.3f}'
+
+        is_weakest = weakest_key is not None and (
+            (id_a, id_b) == weakest_key or (id_b, id_a) == weakest_key
+        )
+
+        if is_weakest:
+            lines.append(
+                f'  "{id_a}" -- "{id_b}" '
+                f'[label="{score_label}" color=red style=dashed];'
+            )
+        else:
+            lines.append(f'  "{id_a}" -- "{id_b}" [label="{score_label}"];')
+
+    lines.append("}")
+
+    st.markdown("#### Cluster graph")
+    st.graphviz_chart("\n".join(lines))
+
+
 def render_edge_table(
     edges: pl.DataFrame,
     entity_text: dict[str, str] | None = None,
@@ -247,4 +300,5 @@ def render_inspector(
     render_member_drilldown(members)
     render_alias_table(members)
     render_source_docs(members, doc_paths=doc_paths)
+    render_cluster_graph(members, edges)
     render_edge_table(edges, entity_text=entity_text)
