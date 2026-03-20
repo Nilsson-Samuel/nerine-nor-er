@@ -92,8 +92,10 @@ def encode_and_persist(
     faiss.normalize_L2(ctx_emb)
 
     # Alignment check before persisting
-    assert emb.shape == (n, EMBEDDING_DIM), f"emb shape {emb.shape} != ({n}, {EMBEDDING_DIM})"
-    assert ctx_emb.shape == (n, EMBEDDING_DIM), f"ctx shape {ctx_emb.shape}"
+    if emb.shape != (n, EMBEDDING_DIM):
+        raise ValueError(f"emb shape {emb.shape} != ({n}, {EMBEDDING_DIM})")
+    if ctx_emb.shape != (n, EMBEDDING_DIM):
+        raise ValueError(f"ctx_emb shape {ctx_emb.shape} != ({n}, {EMBEDDING_DIM})")
 
     out_dir.mkdir(parents=True, exist_ok=True)
     np.save(out_dir / "embeddings.npy", emb)
