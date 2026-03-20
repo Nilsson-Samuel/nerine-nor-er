@@ -13,6 +13,8 @@ from metaphone import doublemetaphone
 
 logger = logging.getLogger(__name__)
 
+MAX_BUCKET_SIZE = 500
+
 
 def _nor_pre_normalize(text: str) -> str:
     """Normalize Norwegian characters to ASCII-friendly phonetic input."""
@@ -92,11 +94,20 @@ def query_phonetic_pairs(
         List of (entity_id_a, entity_id_b) pairs (may contain duplicates).
     """
     pairs: list[tuple[str, str]] = []
+    skipped = 0
     for bucket in phonetic_index.values():
+        if len(bucket) > MAX_BUCKET_SIZE:
+            skipped += 1
+            continue
         ids = sorted(bucket)
         for i in range(len(ids)):
             for j in range(i + 1, len(ids)):
                 pairs.append((ids[i], ids[j]))
 
+    if skipped:
+        logger.warning(
+            "Phonetic blocking: %d buckets skipped (size > %d)",
+            skipped, MAX_BUCKET_SIZE,
+        )
     logger.info("Phonetic blocking: %d raw pairs from shared codes", len(pairs))
     return pairs

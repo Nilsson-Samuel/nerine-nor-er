@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 # These bypass the same-type constraint because a phone number is a phone
 # number regardless of how NER typed the surrounding entity.
 STRONG_IDENTIFIER_TYPES = {"FIN", "COMM", "VEH"}
+MAX_BUCKET_SIZE = 500
 
 
 def build_exact_name_pairs(
@@ -44,15 +45,26 @@ def build_exact_name_pairs(
         buckets[(etype, name)].append(eid)
 
     pairs: list[tuple[str, str]] = []
+    skipped = 0
     for (_etype, _name), ids in buckets.items():
         if len(ids) < 2:
+            continue
+        if len(ids) > MAX_BUCKET_SIZE:
+            skipped += 1
+            logger.warning(
+                "Exact name bucket too large (%d entities, cap=%d), skipping: %s",
+                len(ids), MAX_BUCKET_SIZE, _name[:40],
+            )
             continue
         ids_sorted = sorted(ids)
         for i in range(len(ids_sorted)):
             for j in range(i + 1, len(ids_sorted)):
                 pairs.append((ids_sorted[i], ids_sorted[j]))
 
-    logger.info("Exact name blocking: %d pairs from shared (type, normalized)", len(pairs))
+    logger.info(
+        "Exact name blocking: %d pairs from shared (type, normalized), %d buckets skipped",
+        len(pairs), skipped,
+    )
     return pairs
 
 
@@ -83,13 +95,24 @@ def build_structured_id_pairs(
             buckets[name].append(eid)
 
     pairs: list[tuple[str, str]] = []
+    skipped = 0
     for _name, ids in buckets.items():
         if len(ids) < 2:
+            continue
+        if len(ids) > MAX_BUCKET_SIZE:
+            skipped += 1
+            logger.warning(
+                "Structured ID bucket too large (%d entities, cap=%d), skipping: %s",
+                len(ids), MAX_BUCKET_SIZE, _name[:40],
+            )
             continue
         ids_sorted = sorted(ids)
         for i in range(len(ids_sorted)):
             for j in range(i + 1, len(ids_sorted)):
                 pairs.append((ids_sorted[i], ids_sorted[j]))
 
-    logger.info("Structured ID blocking: %d pairs from strong identifiers", len(pairs))
+    logger.info(
+        "Structured ID blocking: %d pairs from strong identifiers, %d buckets skipped",
+        len(pairs), skipped,
+    )
     return pairs
