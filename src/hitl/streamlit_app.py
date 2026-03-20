@@ -1,7 +1,7 @@
 """Cluster-first HITL triage interface for resolution outputs.
 
 Provides run selection, routing-bucket exploration, cluster-size distribution,
-and a sortable cluster table for fast triage of resolution results.
+a sortable cluster table, and a cluster inspector for edge-level drilldown.
 
 Launch with:  streamlit run src/hitl/streamlit_app.py
 """
@@ -14,8 +14,10 @@ from pathlib import Path
 import polars as pl
 import streamlit as st
 
+from src.hitl.cluster_view import render_inspector
 from src.hitl.queries import (
     BUCKETS_BY_PROFILE,
+    PROFILE_ROUTE_COLUMN,
     PROFILES,
     bucket_counts,
     bucket_summary,
@@ -30,8 +32,8 @@ from src.hitl.status import diagnostics_sidebar_summary, load_diagnostics_safe
 DEFAULT_DATA_DIR = Path(__file__).resolve().parents[2] / "data" / "processed"
 DATA_DIR = Path(os.environ.get("NERINE_DATA_DIR", str(DEFAULT_DATA_DIR))).expanduser()
 
-st.set_page_config(page_title="Nerine — Cluster Triage", layout="wide")
-st.title("Nerine — Cluster Triage")
+st.set_page_config(page_title="Nerine - Cluster Triage", layout="wide")
+st.title("Nerine - Cluster Triage")
 
 
 # ── Run discovery ──────────────────────────────────────────────────────────────
@@ -99,6 +101,32 @@ if cluster_frame.is_empty():
     st.stop()
 
 
+# ── Inspector view (shown when a cluster is selected) ─────────────────────────
+
+if st.session_state.get("inspected_cluster_id") is not None:
+    inspected_id = st.session_state["inspected_cluster_id"]
+
+    if st.button("Back to cluster list"):
+        st.session_state["inspected_cluster_id"] = None
+        st.rerun()
+
+    # Build the cluster row dict for the inspector header
+    row_frame = cluster_frame.filter(pl.col("cluster_id") == inspected_id)
+    if row_frame.is_empty():
+        st.warning("Cluster not found in current data. Returning to list.")
+        st.session_state["inspected_cluster_id"] = None
+        st.rerun()
+
+    row_dict = row_frame.row(0, named=True)
+
+    # Map the profile-specific route column to a generic "route_action" key
+    route_col = PROFILE_ROUTE_COLUMN.get(selected_profile, "")
+    row_dict["route_action"] = row_dict.get(route_col, "-")
+
+    render_inspector(DATA_DIR, selected_run_id, row_dict)
+    st.stop()
+
+
 # ── Bucket summary cards ──────────────────────────────────────────────────────
 
 st.subheader(f"Bucket: {selected_bucket}")
@@ -156,7 +184,7 @@ else:
     display_frame = bucket_frame
 
 
-# ── Cluster table ─────────────────────────────────────────────────────────────
+# ── Cluster table with inspect buttons ───────────────────────────────────────
 
 st.subheader("Clusters")
 
@@ -175,10 +203,29 @@ DISPLAY_COLUMNS = [
     "suspicious_merge",
 ]
 
-st.dataframe(
+sorted_frame = (
     display_frame.select([c for c in DISPLAY_COLUMNS if c in display_frame.columns])
     .sort("base_confidence")
-    .to_pandas(),
-    use_container_width=True,
-    hide_index=True,
 )
+
+st.dataframe(sorted_frame.to_pandas(), use_container_width=True, hide_index=True)
+
+# Cluster selector for inspection (selectbox below the table)
+# Show canonical_name next to cluster_id for human readability
+cluster_options = [
+    f"{row['cluster_id']}  -  {row['canonical_name']}"
+    for row in sorted_frame.select("cluster_id", "canonical_name").iter_rows(named=True)
+]
+chosen_label = st.selectbox(
+    "Inspect cluster",
+    cluster_options,
+    index=None,
+    placeholder="Select a cluster to inspect...",
+    key="cluster_picker",
+)
+# Extract cluster_id from the combined label
+chosen = chosen_label.split("  -  ")[0] if chosen_label else None
+
+if chosen is not None:
+    st.session_state["inspected_cluster_id"] = chosen
+    st.rerun()

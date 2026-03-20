@@ -1,7 +1,8 @@
 """Cluster query helpers for the HITL triage interface.
 
 Loads resolution artifacts into flat Polars DataFrames and provides
-bucket-level filtering and summary queries for the Streamlit explorer.
+bucket-level filtering, summary queries, and cluster inspector queries
+(members, edges, aliases) for the Streamlit explorer.
 """
 
 from __future__ import annotations
@@ -14,11 +15,14 @@ from typing import Any
 
 import polars as pl
 
-from src.matching.writer import RUN_OUTPUTS_DIRNAME
+import pyarrow.parquet as pq
+
+from src.matching.writer import RUN_OUTPUTS_DIRNAME, get_scored_pairs_output_path
 from src.resolution.writer import (
     CLUSTERS_FILENAME,
     RESOLUTION_STAGE_DIRNAME,
     get_clusters_output_path,
+    get_resolved_entities_output_path,
 )
 
 
@@ -241,3 +245,181 @@ def size_distribution(frame: pl.DataFrame) -> pl.DataFrame:
         .rename({"len": "cluster_count"})
         .sort("cluster_size")
     )
+
+
+# ── Cluster inspector queries ────────────────────────────────────────────────
+
+
+def load_cluster_members(
+    data_dir: Path,
+    run_id: str,
+    cluster_id: str,
+) -> pl.DataFrame:
+    """Load members of one cluster by joining resolved_entities with entities.
+
+    Returns a DataFrame with entity-level detail: entity_id, normalized, text,
+    type, doc_id, count, context, chunk_id, char_start, char_end.
+    Returns an empty frame if the parquet files are missing or unreadable.
+    """
+    resolved_path = get_resolved_entities_output_path(data_dir, run_id)
+    entities_path = data_dir / "entities.parquet"
+
+    if not resolved_path.exists() or not entities_path.exists():
+        return pl.DataFrame()
+
+    try:
+        resolved = pl.from_arrow(pq.read_table(resolved_path))
+        entities = pl.from_arrow(pq.read_table(entities_path))
+    except Exception as exc:
+        logger.warning("Could not read parquet for members: %s", exc)
+        return pl.DataFrame()
+
+    # Filter resolved_entities to the target cluster
+    member_ids = (
+        resolved.filter(
+            (pl.col("run_id") == run_id) & (pl.col("cluster_id") == cluster_id)
+        )
+        .select("entity_id")
+    )
+
+    if member_ids.is_empty():
+        return pl.DataFrame()
+
+    # Join with entities to get surface forms, context, provenance
+    members = (
+        entities.filter(pl.col("run_id") == run_id)
+        .join(member_ids, on="entity_id", how="inner")
+        .select([
+            "entity_id", "normalized", "text", "type", "doc_id",
+            "count", "context", "chunk_id", "char_start", "char_end",
+        ])
+        .sort("entity_id")
+    )
+    return members
+
+
+def load_cluster_edges(
+    data_dir: Path,
+    run_id: str,
+    cluster_id: str,
+) -> pl.DataFrame:
+    """Load all intra-cluster edges from scored_pairs for one cluster.
+
+    Filters scored_pairs to edges where both endpoints belong to the cluster.
+    Returns columns: entity_id_a, entity_id_b, score, blocking_source, shap_top5.
+    Sorted ascending by score (weakest evidence first).
+    """
+    resolved_path = get_resolved_entities_output_path(data_dir, run_id)
+    scored_path = get_scored_pairs_output_path(data_dir, run_id)
+
+    if not resolved_path.exists() or not scored_path.exists():
+        return pl.DataFrame()
+
+    try:
+        resolved = pl.from_arrow(pq.read_table(resolved_path))
+        scored = pl.from_arrow(pq.read_table(scored_path))
+    except Exception as exc:
+        logger.warning("Could not read parquet for edges: %s", exc)
+        return pl.DataFrame()
+
+    member_ids = (
+        resolved.filter(
+            (pl.col("run_id") == run_id) & (pl.col("cluster_id") == cluster_id)
+        )["entity_id"]
+        .to_list()
+    )
+
+    if not member_ids:
+        return pl.DataFrame()
+
+    member_set = set(member_ids)
+
+    # Filter scored pairs to intra-cluster edges
+    edges = scored.filter(
+        (pl.col("run_id") == run_id)
+        & pl.col("entity_id_a").is_in(member_set)
+        & pl.col("entity_id_b").is_in(member_set)
+    )
+
+    # Select display columns, keeping shap_top5 if present
+    keep_cols = ["entity_id_a", "entity_id_b", "score", "blocking_source"]
+    if "shap_top5" in edges.columns:
+        keep_cols.append("shap_top5")
+
+    return edges.select([c for c in keep_cols if c in edges.columns]).sort("score")
+
+
+def find_weakest_edge(edges: pl.DataFrame) -> dict[str, Any] | None:
+    """Return the lowest-score edge from an edges frame, or None if empty."""
+    if edges.is_empty():
+        return None
+    return edges.sort("score").row(0, named=True)
+
+
+def build_alias_table(members: pl.DataFrame) -> pl.DataFrame:
+    """Aggregate members into alias groups by normalized form.
+
+    Returns columns: normalized, surface_forms (list of distinct text values),
+    mention_count (sum of count).
+    """
+    if members.is_empty():
+        return pl.DataFrame(
+            schema={"normalized": pl.Utf8, "surface_forms": pl.List(pl.Utf8),
+                    "mention_count": pl.Int64}
+        )
+
+    return (
+        members.group_by("normalized")
+        .agg([
+            pl.col("text").unique().sort().alias("surface_forms"),
+            pl.col("count").sum().alias("mention_count"),
+        ])
+        .sort("mention_count", descending=True)
+    )
+
+
+def load_doc_paths(data_dir: Path, run_id: str) -> dict[str, str]:
+    """Load doc_id → relative file path mapping from docs.parquet.
+
+    Returns a dict mapping each doc_id to its source file path.
+    Returns an empty dict if docs.parquet is missing or unreadable.
+    """
+    docs_path = data_dir / "docs.parquet"
+    if not docs_path.exists():
+        return {}
+
+    try:
+        table = pl.from_arrow(pq.read_table(docs_path, columns=["run_id", "doc_id", "path"]))
+    except Exception as exc:
+        logger.warning("Could not read docs.parquet: %s", exc)
+        return {}
+
+    filtered = table.filter(pl.col("run_id") == run_id)
+    return dict(zip(filtered["doc_id"].to_list(), filtered["path"].to_list()))
+
+
+def build_entity_text_lookup(members: pl.DataFrame) -> dict[str, str]:
+    """Build entity_id → text mapping from a members frame.
+
+    Used to annotate edge tables and weakest-link displays with
+    human-readable entity surface forms.
+    """
+    if members.is_empty() or "entity_id" not in members.columns:
+        return {}
+    return dict(zip(members["entity_id"].to_list(), members["text"].to_list()))
+
+
+def format_shap_reasons(shap_top5: list[dict[str, float]] | None) -> str:
+    """Format a SHAP top-5 list into a compact human-readable string.
+
+    Each entry is a {feature: str, value: float} struct. Returns a comma-separated
+    summary like 'embedding_sim +0.12, name_jaro -0.03'. Returns '-' if empty.
+    """
+    if not shap_top5:
+        return "-"
+    parts: list[str] = []
+    for entry in shap_top5:
+        feat = entry.get("feature", "?")
+        val = entry.get("value", 0.0)
+        parts.append(f"{feat} {val:+.3f}")
+    return ", ".join(parts)
