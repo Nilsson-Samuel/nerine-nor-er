@@ -13,14 +13,15 @@ from transformers import pipeline as hf_pipeline
 logger = logging.getLogger(__name__)
 
 # NorNE label → pipeline entity type.  Unmapped labels are skipped.
+# DRV (derived names, e.g. "Norwegian") and PROD (software, newspapers) are
+# dropped — they don't map cleanly to PIVCOLF types and inject noise.
+# ITEM/VEH/COMM/FIN come from regex supplements instead.
 _LABEL_MAP: dict[str, str] = {
     "PER": "PER",
-    "DRV": "PER",       # derived from person name → treat as PER
     "ORG": "ORG",
     "GPE_ORG": "ORG",   # geopolitical-as-org
     "LOC": "LOC",
     "GPE_LOC": "LOC",   # geopolitical-as-loc
-    "PROD": "ITEM",     # product → item
 }
 
 _DEFAULT_MODEL = "NbAiLab/nb-bert-base-ner"
