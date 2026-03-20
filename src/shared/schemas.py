@@ -88,8 +88,8 @@ HANDOFF_MANIFEST_KEYS = {
 
 # Contract enums used by strict contract validation helpers below.
 VALID_ENTITY_TYPES = {"PER", "ORG", "LOC", "ITEM", "VEH", "COMM", "FIN"}
-VALID_BLOCKING_METHODS = {"faiss", "phonetic", "minhash"}
-VALID_BLOCKING_SOURCES = {"faiss", "phonetic", "minhash", "multi"}
+VALID_BLOCKING_METHODS = {"faiss", "phonetic", "minhash", "exact", "structured"}
+VALID_BLOCKING_SOURCES = {"faiss", "phonetic", "minhash", "exact", "structured", "multi"}
 _HEX32_CHARS = set("0123456789abcdef")  # For validating 32-char lowercase hex strings
 
 
@@ -368,9 +368,9 @@ def _validate_candidate_pair_rules(table: pa.Table) -> list[str]:
                 f"{sorted(VALID_BLOCKING_SOURCES)}"
             )
         if not isinstance(blocking_method_count, int) or not (
-            1 <= blocking_method_count <= 3
+            1 <= blocking_method_count <= 5
         ):
-            errors.append(f"row {row_index}: blocking_method_count must be in 1..3")
+            errors.append(f"row {row_index}: blocking_method_count must be in 1..5")
         elif isinstance(blocking_methods, list) and (
             blocking_method_count != len(blocking_methods)
         ):

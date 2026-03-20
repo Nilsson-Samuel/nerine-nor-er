@@ -1,9 +1,10 @@
-"""Blocking stage orchestrator — embed, FAISS, phonetic, MinHash, union, write.
+"""Blocking stage orchestrator — exact, structured, FAISS, phonetic, MinHash, union, write.
 
-Reads entities.parquet, generates SBERT embeddings, runs three blocking
-strategies (FAISS HNSW, Double Metaphone, MinHash LSH), unions candidate
-pairs with source tracking, writes candidate_pairs.parquet, and generates
-handoff_manifest.json for the Developer A → B boundary.
+Reads entities.parquet, generates SBERT embeddings, runs five blocking
+strategies (exact name, structured ID, FAISS HNSW, Double Metaphone,
+MinHash LSH), unions candidate pairs with source tracking, writes
+candidate_pairs.parquet, and generates handoff_manifest.json for the
+Developer A → B boundary.
 """
 
 import logging
@@ -19,6 +20,7 @@ from src.blocking.embeddings import (
     encode_and_persist,
     load_entities_for_embedding,
 )
+from src.blocking.exact import build_exact_name_pairs, build_structured_id_pairs
 from src.blocking.faiss_index import DEFAULT_K, build_hnsw_index, query_neighbors
 from src.blocking.minhash import build_minhash_index, query_minhash_pairs
 from src.blocking.phonetic import build_phonetic_index, query_phonetic_pairs
@@ -34,7 +36,7 @@ def run_blocking(
     con: duckdb.DuckDBPyConnection | None = None,
     k: int = DEFAULT_K,
 ) -> str:
-    """Run the full blocking pipeline: embed → block → union → write → validate.
+    """Run the full blocking pipeline: exact → embed → block → union → write → validate.
 
     Args:
         data_dir: Directory containing entities.parquet (and output target).
@@ -66,38 +68,44 @@ def run_blocking(
 
     # Build entity type lookup for same-type filtering
     entity_types = _load_entity_types(data_dir, run_id, con)
+    types_list = [entity_types[eid] for eid in entity_ids]
 
-    # ── Step 2: Embed ──────────────────────────────────────────────────
+    # ── Step 2: Exact blocking (cheap, high-value) ─────────────────────
+    exact_pairs = build_exact_name_pairs(entity_ids, names, types_list)
+    structured_pairs = build_structured_id_pairs(entity_ids, names, types_list)
+
+    # ── Step 3: Embed ──────────────────────────────────────────────────
     embeddings, _ctx_emb = encode_and_persist(
         entity_ids, names, contexts, data_dir,
     )
 
-    # ── Step 3: FAISS blocking ─────────────────────────────────────────
+    # ── Step 4: FAISS blocking ─────────────────────────────────────────
     index = build_hnsw_index(embeddings)
     faiss_pairs = query_neighbors(index, embeddings, entity_ids, k=k)
 
-    # ── Step 4: Phonetic blocking ──────────────────────────────────────
-    types_list = [entity_types[eid] for eid in entity_ids]
+    # ── Step 5: Phonetic blocking ──────────────────────────────────────
     phonetic_index = build_phonetic_index(entity_ids, names, types_list)
     phonetic_pairs = query_phonetic_pairs(phonetic_index)
 
-    # ── Step 5: MinHash blocking ───────────────────────────────────────
+    # ── Step 6: MinHash blocking ───────────────────────────────────────
     lsh, signatures = build_minhash_index(entity_ids, names)
     minhash_pairs = query_minhash_pairs(lsh, signatures, entity_ids)
 
-    # ── Step 6: Union candidates ───────────────────────────────────────
+    # ── Step 7: Union candidates ───────────────────────────────────────
     candidates = union_candidates(
-        faiss_pairs, phonetic_pairs, minhash_pairs, entity_types,
+        faiss_pairs, phonetic_pairs, minhash_pairs,
+        exact_pairs, structured_pairs,
+        entity_types,
     )
 
     if not candidates:
         logger.warning("No candidate pairs after union — check entity count / types.")
         return run_id
 
-    # ── Step 7: Write candidate_pairs.parquet ──────────────────────────
+    # ── Step 8: Write candidate_pairs.parquet ──────────────────────────
     candidate_count = write_candidate_pairs(candidates, run_id, data_dir, con)
 
-    # ── Step 8: Write handoff manifest ─────────────────────────────────
+    # ── Step 9: Write handoff manifest ─────────────────────────────────
     entity_types_present = sorted(set(entity_types.values()))
     write_handoff_manifest(
         run_id=run_id,
@@ -109,7 +117,7 @@ def run_blocking(
         k=k,
     )
 
-    # ── Step 9: Final validation ───────────────────────────────────────
+    # ── Step 10: Final validation ──────────────────────────────────────
     _validate_outputs(data_dir)
 
     elapsed = time.monotonic() - t0
