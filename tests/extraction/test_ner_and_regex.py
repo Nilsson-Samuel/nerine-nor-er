@@ -94,8 +94,34 @@ class TestRegexPlate:
         assert plate_mentions[0]["text"] == "AB 12345"
 
 
+class TestRegexBankAccount:
+    """Norwegian bank account number patterns (FIN)."""
+
+    def test_dot_separated_11_digits(self):
+        text = "Konto 1234.56.78901 ble brukt."
+        mentions = extract_regex_mentions(text, **_CHUNK_META)
+        fin_mentions = [m for m in mentions if m["type"] == "FIN"]
+        assert len(fin_mentions) == 1
+        assert fin_mentions[0]["text"] == "1234.56.78901"
+
+    def test_dot_separated_10_digits(self):
+        text = "Overført til 8601.11.17947."
+        mentions = extract_regex_mentions(text, **_CHUNK_META)
+        fin_mentions = [m for m in mentions if m["type"] == "FIN"]
+        assert len(fin_mentions) == 1
+        assert fin_mentions[0]["text"] == "8601.11.17947"
+
+    def test_provenance_valid(self):
+        text = "Konto 1234.56.78901 registrert."
+        mentions = extract_regex_mentions(text, **_CHUNK_META)
+        fin_mentions = [m for m in mentions if m["type"] == "FIN"]
+        assert len(fin_mentions) == 1
+        m = fin_mentions[0]
+        assert text[m["char_start"]:m["char_end"]] == m["text"]
+
+
 class TestRegexIban:
-    """Norwegian IBAN-like patterns (FIN)."""
+    """Norwegian IBAN patterns (FIN)."""
 
     def test_compact_iban(self):
         text = "Konto NO9386011117947 ble brukt."
