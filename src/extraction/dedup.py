@@ -1,35 +1,29 @@
-"""Within-document entity deduplication — exact then fuzzy merge.
+"""Within-document entity deduplication — exact normalized match only.
 
-Groups mentions by (doc_id, type), merges exact normalized matches,
-then fuzzy-merges remaining mentions within each group.  Each merged
-entity preserves full position provenance and a deterministic primary
-mention (longest normalized, then earliest span as tie-breaker).
+Groups mentions by (doc_id, type) and merges those with identical
+normalized text.  Each merged entity preserves full position provenance
+and a deterministic primary mention (longest normalized, then earliest
+span as tie-breaker).
+
+Only exact matches are collapsed — near-miss variants are left as separate
+entities so downstream candidate generation + matching can decide whether
+they are the same identity.  This avoids irreversible false merges early
+in the pipeline where recall matters more than compactness.
 """
 
 import logging
 from itertools import groupby
 
-from rapidfuzz import fuzz
-
 logger = logging.getLogger(__name__)
-
-# Fuzzy threshold: rapidfuzz.fuzz.ratio returns 0-100.
-# Structured types (COMM, FIN, VEH) use exact-only (no fuzzy) to avoid
-# accidental merges of distinct phone numbers or account numbers.
-_FUZZY_THRESHOLD = 90
-_EXACT_ONLY_TYPES = {"COMM", "FIN", "VEH"}
 
 
 def dedup_mentions(mentions: list[dict]) -> list[dict]:
     """Deduplicate mentions within each (doc_id, type) group.
 
-    Two-pass approach:
-    1. Exact merge: identical `normalized` strings collapse into one entity.
-    2. Fuzzy merge: remaining entities within the same group merge when
-       rapidfuzz.fuzz.ratio > 90 (skipped for structured types).
-
-    Each merged entity gets a deterministic primary mention: the one with
-    the longest normalized text; ties broken by earliest (chunk_id, char_start).
+    Mentions with identical `normalized` text within the same document and
+    entity type are collapsed into a single entity row.  Each merged entity
+    gets a deterministic primary mention: the one with the longest normalized
+    text; ties broken by earliest (chunk_id, char_start).
 
     Args:
         mentions: List of mention dicts, each containing at minimum:
@@ -54,12 +48,8 @@ def dedup_mentions(mentions: list[dict]) -> list[dict]:
     ):
         group_list = list(group)
 
-        # Pass 1: exact merge on normalized text
+        # Exact merge on normalized text
         buckets = _exact_merge(group_list)
-
-        # Pass 2: fuzzy merge (skip for structured types)
-        if entity_type not in _EXACT_ONLY_TYPES:
-            buckets = _fuzzy_merge(buckets)
 
         # Convert buckets → entity records
         for bucket in buckets:
@@ -81,36 +71,6 @@ def _exact_merge(mentions: list[dict]) -> list[list[dict]]:
         key = m["normalized"]
         buckets.setdefault(key, []).append(m)
     return list(buckets.values())
-
-
-def _fuzzy_merge(buckets: list[list[dict]]) -> list[list[dict]]:
-    """Merge buckets whose representative normalized texts are similar."""
-    if len(buckets) <= 1:
-        return buckets
-
-    # Representative = longest normalized in bucket (deterministic)
-    reps = [_representative_normalized(b) for b in buckets]
-    merged_flags = [False] * len(buckets)
-    result: list[list[dict]] = []
-
-    for i in range(len(buckets)):
-        if merged_flags[i]:
-            continue
-        current = list(buckets[i])
-        for j in range(i + 1, len(buckets)):
-            if merged_flags[j]:
-                continue
-            if fuzz.ratio(reps[i], reps[j]) > _FUZZY_THRESHOLD:
-                current.extend(buckets[j])
-                merged_flags[j] = True
-        result.append(current)
-
-    return result
-
-
-def _representative_normalized(bucket: list[dict]) -> str:
-    """Pick the representative normalized text from a bucket (longest first)."""
-    return max(bucket, key=lambda m: (len(m["normalized"]), m["normalized"]))["normalized"]
 
 
 def _build_entity_record(
