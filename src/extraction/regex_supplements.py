@@ -1,4 +1,4 @@
-"""Regex supplement extraction — structured patterns for phone, fnr, plates, IBAN.
+"""Regex supplement extraction — structured patterns for phone, fnr, plates, and FIN.
 
 Augments NER model output with deterministic pattern matches for structured
 identifiers that transformer models typically miss.  Each match becomes a

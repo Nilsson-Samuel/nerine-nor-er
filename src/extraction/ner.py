@@ -1,8 +1,10 @@
 """NER pipeline wrapper — runs NbAiLab/nb-bert-base-ner on chunk text.
 
 Loads the HuggingFace NER pipeline once, runs inference per chunk, and maps
-model labels (NorNE ontology) into the pipeline entity types (PER, ORG, LOC, ITEM).
-Returns typed mention dicts with char-level provenance.
+supported NorNE labels into the current extraction entity types. Today that
+means only base NER support for PER, ORG, and LOC. Structured types are added
+by regex supplements, while ITEM remains unsupported until a dedicated
+extractor or fine-tuned model is introduced.
 """
 
 import logging
@@ -12,10 +14,12 @@ from transformers import pipeline as hf_pipeline
 
 logger = logging.getLogger(__name__)
 
-# NorNE label → pipeline entity type.  Unmapped labels are skipped.
+# NorNE label → pipeline entity type. Unmapped labels are skipped.
 # DRV (derived names, e.g. "Norwegian") and PROD (software, newspapers) are
-# dropped — they don't map cleanly to PIVCOLF types and inject noise.
-# ITEM/VEH/COMM/FIN come from regex supplements instead.
+# dropped — they don't map cleanly to the extraction ontology and inject noise.
+# Regex supplements currently add structured PER/COMM/VEH/FIN mentions only.
+# ITEM is intentionally unsupported in this stage until we have a more
+# defensible extractor or a fine-tuned model.
 _LABEL_MAP: dict[str, str] = {
     "PER": "PER",
     "ORG": "ORG",
@@ -76,7 +80,8 @@ def extract_ner_mentions(
 
     Returns:
         List of mention dicts with keys: doc_id, chunk_id, text, type,
-        char_start, char_end, page_num, source_unit_kind, source.
+        char_start, char_end, page_num, source_unit_kind, source. Only
+        PER/ORG/LOC are emitted from the base NER model in the current setup.
     """
     if not chunk_text.strip():
         return []

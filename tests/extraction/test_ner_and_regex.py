@@ -1,7 +1,8 @@
 """Tests for NER extraction and regex supplement modules.
 
 Covers important (validation gate) criteria:
-- NER produces PER, ORG, LOC mentions from model output
+- NER produces only the currently supported PER, ORG, LOC mentions
+- Unsupported NER labels like DRV/PROD are dropped explicitly
 - Regex supplements produce COMM, PER (fnr), VEH, FIN hits
 - All mentions have valid char_start/char_end provenance
 - chunk_text[char_start:char_end] == mention["text"]
@@ -12,6 +13,7 @@ Covers important (validation gate) criteria:
 
 import pytest
 
+from src.extraction.ner import extract_ner_mentions
 from src.extraction.regex_supplements import (
     extract_regex_mentions,
     filter_overlapping_with_ner,
@@ -29,6 +31,46 @@ _CHUNK_META = {
     "page_num": 0,
     "source_unit_kind": "pdf_page",
 }
+
+
+# ---------------------------------------------------------------------------
+# NER mapping tests
+# ---------------------------------------------------------------------------
+
+class TestNerLabelMapping:
+    """Base NER only emits supported PER/ORG/LOC labels."""
+
+    def test_supported_labels_are_mapped(self):
+        text = "Ola jobber i DNB i Oslo."
+        ner_pipe = lambda _: [
+            {"entity_group": "PER", "start": 0, "end": 3},
+            {"entity_group": "ORG", "start": 14, "end": 17},
+            {"entity_group": "LOC", "start": 20, "end": 24},
+        ]
+
+        mentions = extract_ner_mentions(text, ner_pipe=ner_pipe, **_CHUNK_META)
+
+        assert [m["type"] for m in mentions] == ["PER", "ORG", "LOC"]
+        assert [m["text"] for m in mentions] == ["Ola", "DNB", "Oslo"]
+        assert all(m["source"] == "ner" for m in mentions)
+
+    def test_unsupported_labels_are_dropped(self):
+        text = "Norwegian leste VG i Bergen."
+        ner_pipe = lambda _: [
+            {"entity_group": "DRV", "start": 0, "end": 9},
+            {"entity_group": "PROD", "start": 16, "end": 18},
+            {"entity_group": "GPE_LOC", "start": 21, "end": 27},
+        ]
+
+        mentions = extract_ner_mentions(text, ner_pipe=ner_pipe, **_CHUNK_META)
+
+        assert len(mentions) == 1
+        assert mentions[0]["type"] == "LOC"
+        assert mentions[0]["text"] == "Bergen"
+
+    def test_empty_or_whitespace_text_skips_ner(self):
+        ner_pipe = pytest.fail
+        assert extract_ner_mentions("   \n\t", ner_pipe=ner_pipe, **_CHUNK_META) == []
 
 
 # ---------------------------------------------------------------------------
