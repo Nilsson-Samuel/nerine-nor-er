@@ -24,8 +24,6 @@ def union_candidates(
 
     Enforces:
     - Same-type constraint: only pairs where both entities share the same type.
-      (Structured pairs bypass this — a phone number is the same identifier
-      regardless of how NER typed the surrounding entity.)
     - Canonical ordering: entity_id_a < entity_id_b.
     - No self-pairs.
     - Source tracking: which methods produced each pair.
@@ -49,19 +47,16 @@ def union_candidates(
     def _add_pairs(
         raw: list[tuple[str, str]],
         method: str,
-        *,
-        skip_type_check: bool = False,
     ) -> int:
         added = 0
         for a, b in raw:
             if a == b:
                 continue
-            # Same-type constraint (structured pairs bypass this)
-            if not skip_type_check:
-                type_a = entity_types.get(a)
-                type_b = entity_types.get(b)
-                if type_a != type_b:
-                    continue
+            # Same-type constraint
+            type_a = entity_types.get(a)
+            type_b = entity_types.get(b)
+            if type_a != type_b:
+                continue
             # Canonical ordering
             key = (a, b) if a < b else (b, a)
             pair_methods[key].add(method)
@@ -69,7 +64,7 @@ def union_candidates(
         return added
 
     n_exact = _add_pairs(exact_pairs, "exact")
-    n_structured = _add_pairs(structured_pairs, "structured", skip_type_check=True)
+    n_structured = _add_pairs(structured_pairs, "structured")
     n_faiss = _add_pairs(faiss_pairs, "faiss")
     n_phonetic = _add_pairs(phonetic_pairs, "phonetic")
     n_minhash = _add_pairs(minhash_pairs, "minhash")

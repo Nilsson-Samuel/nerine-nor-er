@@ -13,7 +13,7 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
-# HNSW hyperparameters (from design-context)
+# HNSW hyperparameters
 HNSW_M = 32
 EF_CONSTRUCTION = 200
 EF_SEARCH = 64

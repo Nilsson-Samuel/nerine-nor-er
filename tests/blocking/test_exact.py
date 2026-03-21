@@ -4,7 +4,7 @@ Covers:
 - Same (type, normalized) pairs are generated
 - Different types with same name produce no pairs
 - Singletons produce no pairs
-- Structured ID pairs are generated across type boundaries (FIN/COMM/VEH)
+- Structured ID pairs enforce same-type; cross-type collisions are logged only
 - Non-strong types (PER, ORG, LOC) are excluded from structured blocking
 - Canonical ordering (a < b) on all output pairs
 """
@@ -90,12 +90,13 @@ class TestBuildStructuredIdPairs:
         )
         assert (ID_A, ID_B) in pairs
 
-    def test_cross_type_strong_ids_produces_pair(self):
-        # Same identifier found as FIN in one doc and COMM in another
+    def test_cross_type_strong_ids_no_pair(self):
+        # Same identifier found as FIN in one doc and COMM in another —
+        # not emitted as a pair, but logged for analysis
         pairs = build_structured_id_pairs(
             [ID_A, ID_B], ["1234567890", "1234567890"], ["FIN", "COMM"],
         )
-        assert (ID_A, ID_B) in pairs
+        assert len(pairs) == 0
 
     def test_per_excluded_from_structured(self):
         pairs = build_structured_id_pairs(

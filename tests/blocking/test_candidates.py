@@ -2,7 +2,7 @@
 
 Covers:
 - Same-type constraint filters cross-type pairs
-- Structured pairs bypass same-type constraint
+- Structured pairs also enforce same-type constraint
 - Self-pairs are excluded
 - Canonical ordering (a < b) enforced regardless of input order
 - Multi-method pairs get blocking_source="multi"
@@ -51,15 +51,26 @@ class TestSameTypeConstraint:
         )
         assert len(result) == 0
 
-    def test_structured_bypasses_type_check(self):
-        # Structured pairs skip the same-type constraint
+    def test_structured_same_type_kept(self):
+        # Structured pairs with same type are kept
+        types = {ID_A: "FIN", ID_B: "FIN", ID_C: "ORG", ID_D: "FIN"}
+        result = union_candidates(
+            faiss_pairs=[], phonetic_pairs=[], minhash_pairs=[],
+            exact_pairs=[],
+            structured_pairs=[(ID_A, ID_B)],  # FIN + FIN
+            entity_types=types,
+        )
+        assert len(result) == 1
+
+    def test_structured_cross_type_filtered(self):
+        # Structured pairs with different types are filtered
         result = union_candidates(
             faiss_pairs=[], phonetic_pairs=[], minhash_pairs=[],
             exact_pairs=[],
             structured_pairs=[(ID_A, ID_C)],  # PER + ORG
             entity_types=TYPES,
         )
-        assert len(result) == 1
+        assert len(result) == 0
 
 
 class TestSelfPairFiltering:
