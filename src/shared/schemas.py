@@ -87,10 +87,10 @@ HANDOFF_MANIFEST_KEYS = {
 }
 
 # Contract enums used by strict contract validation helpers below.
-VALID_ENTITY_TYPES = {"PER", "ORG", "LOC", "ITEM", "VEH", "COMM", "FIN"}
 VALID_BLOCKING_METHODS = {"faiss", "phonetic", "minhash", "exact", "structured"}
 VALID_BLOCKING_SOURCES = {"faiss", "phonetic", "minhash", "exact", "structured", "multi"}
 _HEX32_CHARS = set("0123456789abcdef")  # For validating 32-char lowercase hex strings
+VALID_ROUTE_ACTIONS = {"auto_merge", "review", "defer", "keep_separate"}
 
 
 # Validate only column presence and exact PyArrow types against a schema contract.
