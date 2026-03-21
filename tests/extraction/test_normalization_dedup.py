@@ -171,9 +171,11 @@ class TestNoCrossDocMerge:
         assert len(result) == 2
 
 
-class TestFuzzyDedup:
-    def test_similar_names_merged(self):
-        # "Per Hansen" vs "Per Hanseen" — ratio > 90
+class TestExactOnlyDedup:
+    """Only exact normalized matches merge — near-miss variants stay separate."""
+
+    def test_similar_names_not_merged(self):
+        # "Per Hansen" vs "Per Hanseen" — similar but different normalized text
         mentions = [
             _make_mention(text="Per Hansen", normalized="Per Hansen",
                           char_start=0, char_end=10),
@@ -181,26 +183,10 @@ class TestFuzzyDedup:
                           char_start=50, char_end=61),
         ]
         result = dedup_mentions(mentions)
-        assert len(result) == 1
-        assert result[0]["count"] == 2
-        # Longest normalized is primary
-        assert result[0]["normalized"] == "Per Hanseen"
-
-    def test_dissimilar_names_not_merged(self):
-        mentions = [
-            _make_mention(text="Per Hansen", normalized="Per Hansen",
-                          char_start=0, char_end=10),
-            _make_mention(text="Kari Nordmann", normalized="Kari Nordmann",
-                          char_start=50, char_end=63),
-        ]
-        result = dedup_mentions(mentions)
         assert len(result) == 2
 
-
-class TestStructuredTypeNoFuzzy:
-    """COMM, FIN, VEH should never fuzzy-merge — only exact."""
-
-    def test_comm_no_fuzzy(self):
+    def test_one_edit_apart_not_merged(self):
+        # Distinct phone numbers that differ by one digit stay separate
         mentions = [
             _make_mention(text="91234567", normalized="91234567",
                           entity_type="COMM", char_start=0, char_end=8),
@@ -208,10 +194,9 @@ class TestStructuredTypeNoFuzzy:
                           entity_type="COMM", char_start=20, char_end=28),
         ]
         result = dedup_mentions(mentions)
-        # These are similar (ratio > 90) but should NOT merge
         assert len(result) == 2
 
-    def test_fin_no_fuzzy(self):
+    def test_similar_fin_not_merged(self):
         mentions = [
             _make_mention(text="NO9386011117947", normalized="NO9386011117947",
                           entity_type="FIN", char_start=0, char_end=15),
@@ -221,7 +206,7 @@ class TestStructuredTypeNoFuzzy:
         result = dedup_mentions(mentions)
         assert len(result) == 2
 
-    def test_veh_no_fuzzy(self):
+    def test_similar_veh_not_merged(self):
         mentions = [
             _make_mention(text="AB12345", normalized="AB12345",
                           entity_type="VEH", char_start=0, char_end=7),
@@ -233,24 +218,16 @@ class TestStructuredTypeNoFuzzy:
 
 
 class TestPrimaryMentionSelection:
-    def test_longest_normalized_is_primary(self):
+    def test_tiebreak_earliest_chunk_id(self):
         mentions = [
-            _make_mention(text="Per", normalized="Per",
-                          char_start=0, char_end=3),
-            _make_mention(text="Per Hansen", normalized="Per Hansen",
-                          char_start=50, char_end=60),
-        ]
-        # These won't fuzzy-merge (ratio too low), but let's test exact merge
-        # with same normalized
-        mentions_exact = [
             _make_mention(text="Per H.", normalized="Per H.",
                           char_start=0, char_end=6, chunk_id="c" * 32),
             _make_mention(text="Per H.", normalized="Per H.",
                           char_start=50, char_end=56, chunk_id="d" * 32),
         ]
-        result = dedup_mentions(mentions_exact)
+        result = dedup_mentions(mentions)
         assert len(result) == 1
-        # Tie-break: earliest chunk_id
+        # Same normalized length, so tie-break: earliest chunk_id
         assert result[0]["chunk_id"] == "c" * 32
 
     def test_tiebreak_earliest_span(self):
