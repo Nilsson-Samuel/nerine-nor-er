@@ -11,6 +11,7 @@ import pytest
 from lightgbm import LGBMClassifier
 from sklearn.model_selection import train_test_split
 
+from src.matching.run import run_features
 from src.matching.reranker import evaluate_lightgbm, train_lightgbm
 from src.synthetic.build_matching_dataset import build_matching_dataset, load_labeled_feature_matrix
 
@@ -85,6 +86,7 @@ def synthetic_training_dir(tmp_path: Path) -> tuple[Path, str]:
     identity_groups_path.write_text(json.dumps(_training_payload()), encoding="utf-8")
 
     build_matching_dataset(identity_groups_path, data_dir, max_pairs=2500, seed=7)
+    run_features(data_dir, "run_baseline_lgbm")
     return data_dir, "run_baseline_lgbm"
 
 

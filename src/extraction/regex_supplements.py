@@ -1,4 +1,4 @@
-"""Regex supplement extraction — structured patterns for phone, fnr, plates, IBAN.
+"""Regex supplement extraction — structured patterns for phone, fnr, plates, and FIN.
 
 Augments NER model output with deterministic pattern matches for structured
 identifiers that transformer models typically miss.  Each match becomes a
@@ -26,8 +26,11 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
     "VEH": [
         re.compile(r"\b[A-Z]{2}\s?\d{4,5}\b"),
     ],
-    # Norwegian IBAN-like: NO + 2 check digits + 4+4+3 digits (spaced or compact)
+    # Norwegian bank account: 4.2.5 or 4.2.4 digits with dot separators
+    # This is the most common format investigators use (e.g. "1234.56.78901").
+    # Norwegian IBAN: NO + 2 check digits + 11 digits (spaced or compact).
     "FIN": [
+        re.compile(r"\b\d{4}\.\d{2}\.\d{4,5}\b"),
         re.compile(r"\bNO\d{2}\s?\d{4}\s?\d{4}\s?\d{3}\b"),
     ],
 }
@@ -107,9 +110,10 @@ def _overlaps_any(start: int, end: int, spans: list[tuple[int, int]]) -> bool:
 
 
 def _remove_overlaps(mentions: list[dict]) -> list[dict]:
-    """Remove overlapping mentions, keeping the longest (earliest if tied).
+    """Remove overlapping mentions via greedy first-match.
 
-    Input must be sorted by (char_start, -char_end).
+    Input must be sorted by (char_start, -char_end).  At each position the
+    first (i.e. earliest-starting, longest) non-overlapping mention wins.
     """
     result: list[dict] = []
     last_end = -1
