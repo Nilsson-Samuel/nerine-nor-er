@@ -13,3 +13,7 @@ ftfy==6.3.1
 lightgbm==4.6.0
 scikit-learn==1.8.0
 optuna==4.7.0
+faiss-cpu>=1.7.4
+datasketch>=1.6.0
+sentence-transformers>=2.2.0
+

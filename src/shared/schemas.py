@@ -143,8 +143,9 @@ HANDOFF_MANIFEST_KEYS = {
 
 # Contract enums used by strict contract validation helpers below.
 VALID_ENTITY_TYPES = {"PER", "ORG", "LOC", "ITEM", "VEH", "COMM", "FIN"}
-VALID_BLOCKING_METHODS = {"faiss", "phonetic", "minhash"}
-VALID_BLOCKING_SOURCES = {"faiss", "phonetic", "minhash", "multi"}
+VALID_BLOCKING_METHODS = {"faiss", "phonetic", "minhash", "exact", "structured"}
+VALID_BLOCKING_SOURCES = {"faiss", "phonetic", "minhash", "exact", "structured", "multi"}
+_HEX32_CHARS = set("0123456789abcdef")  # For validating 32-char lowercase hex strings
 VALID_ROUTE_ACTIONS = {"auto_merge", "review", "defer", "keep_separate"}
 
 
@@ -442,9 +443,9 @@ def _validate_candidate_pair_rules(table: pa.Table) -> list[str]:
                 f"{sorted(VALID_BLOCKING_SOURCES)}"
             )
         if not isinstance(blocking_method_count, int) or not (
-            1 <= blocking_method_count <= 3
+            1 <= blocking_method_count <= 5
         ):
-            errors.append(f"row {row_index}: blocking_method_count must be in 1..3")
+            errors.append(f"row {row_index}: blocking_method_count must be in 1..5")
         elif isinstance(blocking_methods, list) and (
             blocking_method_count != len(blocking_methods)
         ):
@@ -590,15 +591,15 @@ def _validate_scored_pair_rules(
         _row_indices_where(
             frame,
             pl.col("blocking_method_count").is_null()
-            | (~pl.col("blocking_method_count").is_between(1, 3, closed="both")).fill_null(True),
+            | (~pl.col("blocking_method_count").is_between(1, 5, closed="both")).fill_null(True),
         ),
-        "blocking_method_count must be in 1..3",
+        "blocking_method_count must be in 1..5",
     )
     _extend_row_errors(
         errors,
         _row_indices_where(
             frame,
-            pl.col("blocking_method_count").is_between(1, 3, closed="both").fill_null(False)
+            pl.col("blocking_method_count").is_between(1, 5, closed="both").fill_null(False)
             & (pl.col("blocking_method_count") != pl.col("__blocking_methods_len")).fill_null(False),
         ),
         "blocking_method_count must equal len(blocking_methods)",
