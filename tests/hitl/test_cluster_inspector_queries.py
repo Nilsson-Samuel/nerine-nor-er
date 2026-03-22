@@ -14,6 +14,7 @@ from src.hitl.queries import (
     find_weakest_edge,
     format_shap_reasons,
     load_cluster_edges,
+    load_cluster_member_ids,
     load_cluster_members,
 )
 from src.matching.writer import (
@@ -217,6 +218,19 @@ def inspector_data_dir(tmp_path: Path) -> Path:
 
 
 # ── load_cluster_members ─────────────────────────────────────────────────────
+
+
+def test_load_cluster_member_ids_returns_cluster_members(
+    inspector_data_dir: Path,
+) -> None:
+    member_ids = sorted(load_cluster_member_ids(inspector_data_dir, RUN_ID, CLUSTER_A))
+    assert member_ids == ["e1", "e2", "e3"]
+
+
+def test_load_cluster_member_ids_empty_for_unknown_cluster(
+    inspector_data_dir: Path,
+) -> None:
+    assert load_cluster_member_ids(inspector_data_dir, RUN_ID, "no_such_cluster") == []
 
 
 def test_load_cluster_members_returns_correct_count(

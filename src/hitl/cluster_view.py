@@ -7,6 +7,7 @@ with weakest-link highlight, and SHAP evidence formatting.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import polars as pl
@@ -18,6 +19,7 @@ from src.hitl.queries import (
     find_weakest_edge,
     format_shap_reasons,
     load_cluster_edges,
+    load_cluster_member_ids,
     load_cluster_members,
     load_doc_paths,
 )
@@ -27,6 +29,12 @@ from src.hitl.ui_utils import (
     format_metric_value,
     parse_option_id,
 )
+
+
+@st.cache_data
+def _cached_doc_paths(data_dir_str: str, run_id: str) -> dict[str, str]:
+    """Cache doc path lookup for the selected run."""
+    return load_doc_paths(Path(data_dir_str), run_id)
 
 
 def render_cluster_header(cluster_row: dict[str, Any]) -> None:
@@ -297,9 +305,10 @@ def render_inspector(
 
     render_cluster_header(cluster_row)
 
-    members = load_cluster_members(data_dir, run_id, cluster_id)
-    edges = load_cluster_edges(data_dir, run_id, cluster_id)
-    doc_paths = load_doc_paths(data_dir, run_id)
+    member_ids = load_cluster_member_ids(data_dir, run_id, cluster_id)
+    members = load_cluster_members(data_dir, run_id, cluster_id, member_ids=member_ids)
+    edges = load_cluster_edges(data_dir, run_id, cluster_id, member_ids=member_ids)
+    doc_paths = _cached_doc_paths(str(data_dir), run_id)
     entity_text = build_entity_text_lookup(members)
 
     render_member_table(members, doc_paths=doc_paths)

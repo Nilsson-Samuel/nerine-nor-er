@@ -56,6 +56,20 @@ _FRAME_SCHEMA: dict[str, pl.DataType] = {
     "route_quick_low_hitl": pl.Utf8,
 }
 
+_MEMBER_COLUMNS = [
+    "entity_id",
+    "normalized",
+    "text",
+    "type",
+    "doc_id",
+    "count",
+    "context",
+    "chunk_id",
+    "char_start",
+    "char_end",
+]
+_EDGE_COLUMNS = ["entity_id_a", "entity_id_b", "score", "blocking_source", "shap_top5"]
+
 
 def _decode_run_id(dir_name: str) -> str | None:
     """Reverse the rid_<urlsafe-base64> encoding used for per-run directory names."""
@@ -250,58 +264,76 @@ def size_distribution(frame: pl.DataFrame) -> pl.DataFrame:
 # ── Cluster inspector queries ────────────────────────────────────────────────
 
 
+def load_cluster_member_ids(
+    data_dir: Path,
+    run_id: str,
+    cluster_id: str,
+) -> list[str]:
+    """Load all entity IDs assigned to one cluster."""
+    resolved_path = get_resolved_entities_output_path(data_dir, run_id)
+    if not resolved_path.exists():
+        return []
+
+    try:
+        resolved = pl.from_arrow(
+            pq.read_table(
+                resolved_path,
+                columns=["entity_id"],
+                filters=[("cluster_id", "==", cluster_id)],
+            )
+        )
+    except Exception as exc:
+        logger.warning("Could not read parquet for member IDs: %s", exc)
+        return []
+
+    if resolved.is_empty():
+        return []
+    return resolved["entity_id"].to_list()
+
+
 def load_cluster_members(
     data_dir: Path,
     run_id: str,
     cluster_id: str,
+    member_ids: list[str] | None = None,
 ) -> pl.DataFrame:
-    """Load members of one cluster by joining resolved_entities with entities.
+    """Load members of one cluster by reading only matching entity rows.
 
     Returns a DataFrame with entity-level detail: entity_id, normalized, text,
     type, doc_id, count, context, chunk_id, char_start, char_end.
     Returns an empty frame if the parquet files are missing or unreadable.
     """
-    resolved_path = get_resolved_entities_output_path(data_dir, run_id)
     entities_path = data_dir / "entities.parquet"
 
-    if not resolved_path.exists() or not entities_path.exists():
+    if member_ids is None:
+        member_ids = load_cluster_member_ids(data_dir, run_id, cluster_id)
+
+    if not member_ids or not entities_path.exists():
         return pl.DataFrame()
 
     try:
-        resolved = pl.from_arrow(pq.read_table(resolved_path))
-        entities = pl.from_arrow(pq.read_table(entities_path))
+        entities = pl.from_arrow(
+            pq.read_table(
+                entities_path,
+                columns=_MEMBER_COLUMNS,
+                filters=[
+                    ("run_id", "==", run_id),
+                    ("entity_id", "in", member_ids),
+                ],
+            )
+        )
     except Exception as exc:
         logger.warning("Could not read parquet for members: %s", exc)
         return pl.DataFrame()
 
-    # Filter resolved_entities to the target cluster
-    member_ids = (
-        resolved.filter(
-            (pl.col("run_id") == run_id) & (pl.col("cluster_id") == cluster_id)
-        )
-        .select("entity_id")
-    )
-
-    if member_ids.is_empty():
-        return pl.DataFrame()
-
-    # Join with entities to get surface forms, context, provenance
-    members = (
-        entities.filter(pl.col("run_id") == run_id)
-        .join(member_ids, on="entity_id", how="inner")
-        .select([
-            "entity_id", "normalized", "text", "type", "doc_id",
-            "count", "context", "chunk_id", "char_start", "char_end",
-        ])
-        .sort("entity_id")
-    )
-    return members
+    return entities.sort("entity_id")
 
 
 def load_cluster_edges(
     data_dir: Path,
     run_id: str,
     cluster_id: str,
+    member_ids: list[str] | None = None,
 ) -> pl.DataFrame:
     """Load all intra-cluster edges from scored_pairs for one cluster.
 
@@ -309,44 +341,32 @@ def load_cluster_edges(
     Returns columns: entity_id_a, entity_id_b, score, blocking_source, shap_top5.
     Sorted ascending by score (weakest evidence first).
     """
-    resolved_path = get_resolved_entities_output_path(data_dir, run_id)
     scored_path = get_scored_pairs_output_path(data_dir, run_id)
 
-    if not resolved_path.exists() or not scored_path.exists():
+    if member_ids is None:
+        member_ids = load_cluster_member_ids(data_dir, run_id, cluster_id)
+
+    if len(member_ids) < 2 or not scored_path.exists():
         return pl.DataFrame()
 
     try:
-        resolved = pl.from_arrow(pq.read_table(resolved_path))
-        scored = pl.from_arrow(pq.read_table(scored_path))
+        scored_schema = pq.read_schema(scored_path).names
+        keep_cols = [col for col in _EDGE_COLUMNS if col in scored_schema]
+        scored = pl.from_arrow(
+            pq.read_table(
+                scored_path,
+                columns=keep_cols,
+                filters=[
+                    ("entity_id_a", "in", member_ids),
+                    ("entity_id_b", "in", member_ids),
+                ],
+            )
+        )
     except Exception as exc:
         logger.warning("Could not read parquet for edges: %s", exc)
         return pl.DataFrame()
 
-    member_ids = (
-        resolved.filter(
-            (pl.col("run_id") == run_id) & (pl.col("cluster_id") == cluster_id)
-        )["entity_id"]
-        .to_list()
-    )
-
-    if not member_ids:
-        return pl.DataFrame()
-
-    member_set = set(member_ids)
-
-    # Filter scored pairs to intra-cluster edges
-    edges = scored.filter(
-        (pl.col("run_id") == run_id)
-        & pl.col("entity_id_a").is_in(member_set)
-        & pl.col("entity_id_b").is_in(member_set)
-    )
-
-    # Select display columns, keeping shap_top5 if present
-    keep_cols = ["entity_id_a", "entity_id_b", "score", "blocking_source"]
-    if "shap_top5" in edges.columns:
-        keep_cols.append("shap_top5")
-
-    return edges.select([c for c in keep_cols if c in edges.columns]).sort("score")
+    return scored.sort("score")
 
 
 def find_weakest_edge(edges: pl.DataFrame) -> dict[str, Any] | None:

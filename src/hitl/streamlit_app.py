@@ -39,7 +39,13 @@ st.title("Nerine - Cluster Triage")
 
 # ── Run discovery ──────────────────────────────────────────────────────────────
 
-run_ids = discover_run_ids(DATA_DIR)
+@st.cache_data
+def _cached_run_ids(data_dir_str: str) -> list[str]:
+    """Cache run discovery across Streamlit reruns."""
+    return discover_run_ids(Path(data_dir_str))
+
+
+run_ids = _cached_run_ids(str(DATA_DIR))
 
 if not run_ids:
     st.warning("No resolution runs found. Run the pipeline first.")
