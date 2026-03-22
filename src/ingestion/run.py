@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 
 # Threshold for flagging extraction as too short (chars after normalization)
 _MIN_EXTRACTED_CHARS = 20
+_NO_INPUT_FILES_TEMPLATE = "No PDF/DOCX files found under case_root: {case_root}"
 
 
 def run_ingestion(
@@ -252,8 +253,7 @@ def run_discovery_and_registration(
     logger.info("Discovered %d files in %s", len(file_paths), case_root)
 
     if not file_paths:
-        logger.warning("No PDF/DOCX files found in %s", case_root)
-        return run_id
+        raise ValueError(_NO_INPUT_FILES_TEMPLATE.format(case_root=case_root))
 
     # Step 2: Register documents (with dedup)
     new_docs = register_documents(file_paths, case_root, run_id, con)

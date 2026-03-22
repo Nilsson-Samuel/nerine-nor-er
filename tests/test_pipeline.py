@@ -297,6 +297,34 @@ def test_run_pipeline_writes_failed_summary_and_stops_on_first_error(
     assert persisted["counts"]["entities"] is None
 
 
+def test_run_pipeline_fails_early_for_empty_case_root_and_surfaces_reason(
+    tmp_path: Path,
+) -> None:
+    case_root = tmp_path / "empty_case"
+    case_root.mkdir()
+    data_dir = tmp_path / "data"
+    run_id = "pipeline_empty_input"
+
+    with pytest.raises(
+        RuntimeError,
+        match="stage 'ingestion'.*No PDF/DOCX files found under case_root",
+    ):
+        pipeline.run_pipeline(case_root, data_dir, run_id=run_id)
+
+    summary_path = pipeline.get_pipeline_summary_path(data_dir, run_id)
+    persisted = json.loads(summary_path.read_text(encoding="utf-8"))
+
+    assert persisted["status"] == "failed"
+    assert persisted["failed_stage"] == "ingestion"
+    assert persisted["error"] == (
+        f"ValueError: No PDF/DOCX files found under case_root: {case_root.resolve()}"
+    )
+    assert [stage["stage"] for stage in persisted["stages"]] == ["ingestion"]
+    assert persisted["stages"][0]["success"] is False
+    assert persisted["counts"]["docs"] is None
+    assert persisted["counts"]["chunks"] is None
+
+
 def test_main_forwards_cli_args(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     captured: dict[str, object] = {}
     case_root = tmp_path / "case"

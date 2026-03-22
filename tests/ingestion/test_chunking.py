@@ -435,6 +435,13 @@ class TestRunIngestion:
         result = run_ingestion(case_root, data_dir)
         assert len(result) == 32
 
+    def test_empty_case_root_raises_clear_error(self, tmp_path: Path, data_dir: Path):
+        empty = tmp_path / "empty_case"
+        empty.mkdir()
+
+        with pytest.raises(ValueError, match="No PDF/DOCX files found under case_root"):
+            run_ingestion(empty, data_dir, run_id="empty_run")
+
     def test_rerun_same_run_id_no_duplicate_chunks(
         self, case_root: Path, data_dir: Path,
     ):
