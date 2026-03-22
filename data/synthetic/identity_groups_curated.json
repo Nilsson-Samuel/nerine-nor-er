@@ -1,0 +1,1264 @@
+{
+  "run_id": "synthetic_run_002",
+  "groups": [
+    {
+      "group_id": "per_berg_lars_01",
+      "entity_type": "PER",
+      "variants": [
+        {
+          "text": "Lars Berg",
+          "normalized": "lars berg",
+          "context": "Lars Berg ble pågrepet på Gardermoen 14. januar og avhørt om sin rolle i transporten."
+        },
+        {
+          "text": "L. Berg",
+          "normalized": "l berg",
+          "context": "Vitnet L. Berg forklarte at han ikke kjente til innholdet i bagasjen."
+        },
+        {
+          "text": "BERG, Lars",
+          "normalized": "berg lars",
+          "context": "Rapporten refererer til BERG, Lars som den antatte kureren."
+        }
+      ],
+      "doc_ids": ["doc_001", "doc_017"],
+      "metadata": {"fnr": "04068812345"}
+    },
+    {
+      "group_id": "per_berg_lars_02",
+      "entity_type": "PER",
+      "variants": [
+        {
+          "text": "Lars Berg",
+          "normalized": "lars berg",
+          "context": "Lars Berg er registrert som disponent for kontonummer 3010.12.34567."
+        },
+        {
+          "text": "Lars G. Berg",
+          "normalized": "lars g berg",
+          "context": "Siktede, Lars G. Berg, nekter for kjennskap til transaksjonene."
+        }
+      ],
+      "doc_ids": ["doc_043", "doc_059"],
+      "metadata": {"fnr": "19057734521"}
+    },
+    {
+      "group_id": "per_johansen_kari_01",
+      "entity_type": "PER",
+      "variants": [
+        {
+          "text": "Kari Johansen",
+          "normalized": "kari johansen",
+          "context": "Kari Johansen ble avhørt som vitne i forbindelse med ranet av Nordea-filialen."
+        },
+        {
+          "text": "K. Johansen",
+          "normalized": "k johansen",
+          "context": "K. Johansen opplyste at hun observerte to menn forlate stedet i høy fart."
+        },
+        {
+          "text": "JOHANSEN Kari",
+          "normalized": "johansen kari",
+          "context": "Politirapport refererer til JOHANSEN Kari som øyenvitne i sak 2024-1188."
+        }
+      ],
+      "doc_ids": ["doc_002", "doc_031"],
+      "metadata": {"fnr": "15069045678"}
+    },
+    {
+      "group_id": "per_johansen_kari_02",
+      "entity_type": "PER",
+      "variants": [
+        {
+          "text": "Kari Johansen",
+          "normalized": "kari johansen",
+          "context": "Kari Johansen er mistenkt for hvitvasking gjennom eiendomskjøp i perioden 2021–2023."
+        },
+        {
+          "text": "Kari M. Johansen",
+          "normalized": "kari m johansen",
+          "context": "Siktede Kari M. Johansen ble løslatt mot kausjon etter avhøret."
+        }
+      ],
+      "doc_ids": ["doc_078", "doc_094"],
+      "metadata": {"fnr": "22118567891"}
+    },
+    {
+      "group_id": "per_olsen_erik_01",
+      "entity_type": "PER",
+      "variants": [
+        {
+          "text": "Erik Olsen",
+          "normalized": "erik olsen",
+          "context": "Erik Olsen er registrert som eier av kjøretøyet med kjennemerke AB 44561."
+        },
+        {
+          "text": "E. Olsen",
+          "normalized": "e olsen",
+          "context": "E. Olsen ble observert i nærheten av åstedet 22. mars kl. 23:15."
+        },
+        {
+          "text": "OLSEN Erik",
+          "normalized": "olsen erik",
+          "context": "OLSEN Erik er oppført som daglig leder i foretaket Olsen Transport AS."
+        }
+      ],
+      "doc_ids": ["doc_003", "doc_022"],
+      "metadata": {"fnr": "07059123456"}
+    },
+    {
+      "group_id": "per_olsen_erik_02",
+      "entity_type": "PER",
+      "variants": [
+        {
+          "text": "Erik Olsen",
+          "normalized": "erik olsen",
+          "context": "Erik Olsen ble avhørt i forbindelse med narkotikabeslag på Alnabru."
+        },
+        {
+          "text": "Erik J. Olsen",
+          "normalized": "erik j olsen",
+          "context": "Siktede Erik J. Olsen nektet for å ha vært på stedet."
+        }
+      ],
+      "doc_ids": ["doc_101", "doc_115"],
+      "metadata": {"fnr": "14038234567"}
+    },
+    {
+      "group_id": "per_andersen_tor_01",
+      "entity_type": "PER",
+      "variants": [
+        {
+          "text": "Tor Andersen",
+          "normalized": "tor andersen",
+          "context": "Tor Andersen er oppgitt som kontaktperson for den mistenkte organisasjonen."
+        },
+        {
+          "text": "T. Andersen",
+          "normalized": "t andersen",
+          "context": "T. Andersen ble sett i møte med den siktede 3. februar."
+        },
+        {
+          "text": "ANDERSEN, Tor",
+          "normalized": "andersen tor",
+          "context": "ANDERSEN, Tor er registrert i politiets register fra sak 2023-4417."
+        }
+      ],
+      "doc_ids": ["doc_004", "doc_038"],
+      "metadata": {"fnr": "30077745678"}
+    },
+    {
+      "group_id": "per_andersen_tor_02",
+      "entity_type": "PER",
+      "variants": [
+        {
+          "text": "Tor Andersen",
+          "normalized": "tor andersen",
+          "context": "Tor Andersen er bosatt i Drammen og driver et regnskapskontor."
+        },
+        {
+          "text": "Tor H. Andersen",
+          "normalized": "tor h andersen",
+          "context": "Vitnet Tor H. Andersen forklarte at han ikke kjenner siktede."
+        }
+      ],
+      "doc_ids": ["doc_133", "doc_147"],
+      "metadata": {"fnr": "11046756789"}
+    },
+    {
+      "group_id": "per_nielsen_anne_01",
+      "entity_type": "PER",
+      "variants": [
+        {
+          "text": "Anne Nielsen",
+          "normalized": "anne nielsen",
+          "context": "Anne Nielsen ble avhørt i forbindelse med svindel mot eldre."
+        },
+        {
+          "text": "A. Nielsen",
+          "normalized": "a nielsen",
+          "context": "A. Nielsen er ifølge vitner leder for gruppen."
+        },
+        {
+          "text": "Anne K. Nielsen",
+          "normalized": "anne k nielsen",
+          "context": "Siktede Anne K. Nielsen erkjenner å ha mottatt pengene."
+        }
+      ],
+      "doc_ids": ["doc_005", "doc_049"],
+      "metadata": {"fnr": "08048967890"}
+    },
+    {
+      "group_id": "per_nielsen_anne_02",
+      "entity_type": "PER",
+      "variants": [
+        {
+          "text": "Anne Nielsen",
+          "normalized": "anne nielsen",
+          "context": "Anne Nielsen er registrert som eier av leiligheten i Bergens sentrum."
+        },
+        {
+          "text": "Nielsen, Anne",
+          "normalized": "nielsen anne",
+          "context": "Nielsen, Anne ble avhørt som vitne i narkotikasak 2024-0771."
+        }
+      ],
+      "doc_ids": ["doc_162", "doc_178"],
+      "metadata": {"fnr": "25099178901"}
+    },
+    {
+      "group_id": "per_karlsen_bjorn_01",
+      "entity_type": "PER",
+      "variants": [
+        {
+          "text": "Bjørn Karlsen",
+          "normalized": "bjørn karlsen",
+          "context": "Bjørn Karlsen er siktet for innbrudd i tre boliger i Asker."
+        },
+        {
+          "text": "B. Karlsen",
+          "normalized": "b karlsen",
+          "context": "B. Karlsen ble gjenkjent fra overvåkningsbilder tatt 11. april."
+        },
+        {
+          "text": "Bjørn K.",
+          "normalized": "bjørn k",
+          "context": "Bjørn K. er omtalt i politiets operative logg fra 11. april."
+        }
+      ],
+      "doc_ids": ["doc_006", "doc_054"],
+      "metadata": {"fnr": "17057089012"}
+    },
+    {
+      "group_id": "per_lindqvist_maria_01",
+      "entity_type": "PER",
+      "variants": [
+        {
+          "text": "Maria Lindqvist",
+          "normalized": "maria lindqvist",
+          "context": "Maria Lindqvist er registrert som mellomledd i det antatte nettverket."
+        },
+        {
+          "text": "M. Lindqvist",
+          "normalized": "m lindqvist",
+          "context": "M. Lindqvist ble pågrepet ved grenseovergangen på Svinesund."
+        }
+      ],
+      "doc_ids": ["doc_007", "doc_063"],
+      "metadata": {"fnr": "03038589023"}
+    },
+    {
+      "group_id": "per_svensson_johan_01",
+      "entity_type": "PER",
+      "variants": [
+        {
+          "text": "Johan Svensson",
+          "normalized": "johan svensson",
+          "context": "Johan Svensson, svensk statsborger, ble avhørt om sin tilknytning til nettverket."
+        },
+        {
+          "text": "J. Svensson",
+          "normalized": "j svensson",
+          "context": "J. Svensson ble observert på Rygge flyplass 8. mai."
+        },
+        {
+          "text": "SVENSSON Johan",
+          "normalized": "svensson johan",
+          "context": "Interpol-varselet refererer til SVENSSON Johan, f. 1985, svensk statsborger."
+        }
+      ],
+      "doc_ids": ["doc_008", "doc_071"],
+      "metadata": {"fnr": "12058534512", "nasjonalitet": "SE"}
+    },
+    {
+      "group_id": "per_haugen_ingrid_01",
+      "entity_type": "PER",
+      "variants": [
+        {
+          "text": "Ingrid Haugen",
+          "normalized": "ingrid haugen",
+          "context": "Ingrid Haugen er registrert som daglig leder i Haugen Eiendom AS."
+        },
+        {
+          "text": "I. Haugen",
+          "normalized": "i haugen",
+          "context": "I. Haugen undertegnet kontrakten den 14. september ifølge dokumentene."
+        }
+      ],
+      "doc_ids": ["doc_009", "doc_082"],
+      "metadata": {"fnr": "28017634523"}
+    },
+    {
+      "group_id": "per_dahl_thomas_01",
+      "entity_type": "PER",
+      "variants": [
+        {
+          "text": "Thomas Dahl",
+          "normalized": "thomas dahl",
+          "context": "Thomas Dahl ble avhørt som mistenkt i forbindelse med biltyverier i Vestfold."
+        },
+        {
+          "text": "T. Dahl",
+          "normalized": "t dahl",
+          "context": "T. Dahl er oppgitt i vitneforklaring som sjåfør av den stjålne varebilen."
+        },
+        {
+          "text": "DAHL Thomas",
+          "normalized": "dahl thomas",
+          "context": "DAHL Thomas er oppført i registeret med tidligere domfellelse for heleri."
+        }
+      ],
+      "doc_ids": ["doc_010", "doc_089"],
+      "metadata": {"fnr": "23088945634"}
+    },
+    {
+      "group_id": "per_strand_hilde_01",
+      "entity_type": "PER",
+      "variants": [
+        {
+          "text": "Hilde Strand",
+          "normalized": "hilde strand",
+          "context": "Hilde Strand ble avhørt om pengeoverføringer til utlandet i 2023."
+        },
+        {
+          "text": "H. Strand",
+          "normalized": "h strand",
+          "context": "H. Strand benekter kjennskap til mottakerkontoen i Luxembourg."
+        }
+      ],
+      "doc_ids": ["doc_011", "doc_097"],
+      "metadata": {"fnr": "14047256745"}
+    },
+    {
+      "group_id": "per_larsen_morten_01",
+      "entity_type": "PER",
+      "variants": [
+        {
+          "text": "Morten Larsen",
+          "normalized": "morten larsen",
+          "context": "Morten Larsen er registrert som mottaker av varene i tolldeklarasjonen."
+        },
+        {
+          "text": "M. Larsen",
+          "normalized": "m larsen",
+          "context": "M. Larsen forklarte at han trodde pakken inneholdt bildeler."
+        },
+        {
+          "text": "LARSEN, Morten",
+          "normalized": "larsen morten",
+          "context": "LARSEN, Morten er under etterforskning for smugling fra Danmark."
+        }
+      ],
+      "doc_ids": ["doc_012", "doc_104"],
+      "metadata": {"fnr": "09097067856"}
+    },
+    {
+      "group_id": "per_larsen_morten_02",
+      "entity_type": "PER",
+      "variants": [
+        {
+          "text": "Morten Larsen",
+          "normalized": "morten larsen",
+          "context": "Morten Larsen er ansatt som vekter og har ikke tjenstlig tilknytning til saken."
+        },
+        {
+          "text": "Morten A. Larsen",
+          "normalized": "morten a larsen",
+          "context": "Vitnet Morten A. Larsen bekrefter å ha sett en person løpe fra stedet."
+        }
+      ],
+      "doc_ids": ["doc_198", "doc_212"],
+      "metadata": {"fnr": "31017878967"}
+    },
+    {
+      "group_id": "per_christensen_silje_01",
+      "entity_type": "PER",
+      "variants": [
+        {
+          "text": "Silje Christensen",
+          "normalized": "silje christensen",
+          "context": "Silje Christensen er mistenkt for å ha videreformidlet bedrageripenger."
+        },
+        {
+          "text": "S. Christensen",
+          "normalized": "s christensen",
+          "context": "S. Christensen ble kontaktet av politiet 17. juni for avhør."
+        },
+        {
+          "text": "Silje C.",
+          "normalized": "silje c",
+          "context": "Silje C. er omtalt i tekstmeldingene mellom de siktede."
+        }
+      ],
+      "doc_ids": ["doc_013", "doc_119"],
+      "metadata": {"fnr": "05108889078"}
+    },
+    {
+      "group_id": "per_pettersen_rune_01",
+      "entity_type": "PER",
+      "variants": [
+        {
+          "text": "Rune Pettersen",
+          "normalized": "rune pettersen",
+          "context": "Rune Pettersen ble funnet i besittelse av narkotika under razzia i Stavanger."
+        },
+        {
+          "text": "R. Pettersen",
+          "normalized": "r pettersen",
+          "context": "R. Pettersen er kjent for politiet fra tidligere narkotikasaker."
+        }
+      ],
+      "doc_ids": ["doc_014", "doc_127"],
+      "metadata": {"fnr": "26037590189"}
+    },
+    {
+      "group_id": "per_magnusson_gunnar_01",
+      "entity_type": "PER",
+      "variants": [
+        {
+          "text": "Gunnar Magnusson",
+          "normalized": "gunnar magnusson",
+          "context": "Gunnar Magnusson, islandsk statsborger, er mistenkt for å ha hvitvasket penger gjennom norske stråselskaper."
+        },
+        {
+          "text": "G. Magnusson",
+          "normalized": "g magnusson",
+          "context": "G. Magnusson ble utlevert fra Island 3. mars."
+        },
+        {
+          "text": "MAGNUSSON Gunnar",
+          "normalized": "magnusson gunnar",
+          "context": "Ekstradisjonsdokumentet refererer til MAGNUSSON Gunnar, f. 1978."
+        }
+      ],
+      "doc_ids": ["doc_015", "doc_136"],
+      "metadata": {"fnr": "14077823478", "nasjonalitet": "IS"}
+    },
+    {
+      "group_id": "per_aasen_frida_01",
+      "entity_type": "PER",
+      "variants": [
+        {
+          "text": "Frida Åsen",
+          "normalized": "frida åsen",
+          "context": "Frida Åsen er registrert som daglig leder i to selskaper med uklart formål."
+        },
+        {
+          "text": "F. Åsen",
+          "normalized": "f åsen",
+          "context": "F. Åsen benekter enhver kunnskap om selskapenes reelle eierforhold."
+        }
+      ],
+      "doc_ids": ["doc_016", "doc_144"],
+      "metadata": {"fnr": "19019001345"}
+    },
+    {
+      "group_id": "per_sorensen_hans_01",
+      "entity_type": "PER",
+      "variants": [
+        {
+          "text": "Hans Sørensen",
+          "normalized": "hans sørensen",
+          "context": "Hans Sørensen er registrert som fører av en stjålet varebil observert ved grensen."
+        },
+        {
+          "text": "H. Sørensen",
+          "normalized": "h sørensen",
+          "context": "H. Sørensen ble stoppet i en rutinekontroll og hadde falske papirer."
+        },
+        {
+          "text": "SØRENSEN Hans",
+          "normalized": "sørensen hans",
+          "context": "Tollmyndigheten rapporterte SØRENSEN Hans til politiet 9. august."
+        }
+      ],
+      "doc_ids": ["doc_018", "doc_152"],
+      "metadata": {"fnr": "05037212456"}
+    },
+    {
+      "group_id": "per_moen_astrid_01",
+      "entity_type": "PER",
+      "variants": [
+        {
+          "text": "Astrid Moen",
+          "normalized": "astrid moen",
+          "context": "Astrid Moen er avhørt som vitne etter å ha observert den siktede i oppgangen."
+        },
+        {
+          "text": "A. Moen",
+          "normalized": "a moen",
+          "context": "A. Moen bekreftet i sin forklaring at hun så en mann bære ut kasser ca. kl. 02:30."
+        }
+      ],
+      "doc_ids": ["doc_019", "doc_161"],
+      "metadata": {"fnr": "22068323567"}
+    },
+    {
+      "group_id": "per_bakke_jonas_01",
+      "entity_type": "PER",
+      "variants": [
+        {
+          "text": "Jonas Bakke",
+          "normalized": "jonas bakke",
+          "context": "Jonas Bakke er siktet for grovt ran mot en gullsmed i Trondheim."
+        },
+        {
+          "text": "J. Bakke",
+          "normalized": "j bakke",
+          "context": "J. Bakke ble identifisert via DNA-spor på åstedet."
+        },
+        {
+          "text": "BAKKE, Jonas",
+          "normalized": "bakke jonas",
+          "context": "BAKKE, Jonas ble pågrepet i sin bolig 18. oktober kl. 06:00."
+        }
+      ],
+      "doc_ids": ["doc_020", "doc_169"],
+      "metadata": {"fnr": "16018534678"}
+    },
+    {
+      "group_id": "per_eriksen_camilla_01",
+      "entity_type": "PER",
+      "variants": [
+        {
+          "text": "Camilla Eriksen",
+          "normalized": "camilla eriksen",
+          "context": "Camilla Eriksen er mistenkt for å ha formidlet falsk dokumentasjon til asylsøkere."
+        },
+        {
+          "text": "C. Eriksen",
+          "normalized": "c eriksen",
+          "context": "C. Eriksen driver angivelig et uregistrert kontor i Grønland-området."
+        },
+        {
+          "text": "Camilla E.",
+          "normalized": "camilla e",
+          "context": "Camilla E. er omtalt i avlyttede samtaler fra november 2023."
+        }
+      ],
+      "doc_ids": ["doc_021", "doc_177"],
+      "metadata": {"fnr": "29079645789"}
+    },
+    {
+      "group_id": "item_pistol_glock_01",
+      "entity_type": "ITEM",
+      "variants": [
+        {
+          "text": "Glock 17",
+          "normalized": "glock 17",
+          "context": "Det ble beslaglagt en Glock 17 under ransaking av boligen til siktede."
+        },
+        {
+          "text": "Glock17",
+          "normalized": "glock17",
+          "context": "Laboratoriet bekreftet at Glock17 var det aktuelle skytevåpenet fra hendelsen."
+        },
+        {
+          "text": "G17 pistol",
+          "normalized": "g17 pistol",
+          "context": "Vitnet beskrev G17 pistol som det siktet brukte under ranet."
+        }
+      ],
+      "doc_ids": ["doc_201", "doc_215"],
+      "metadata": {"serienummer": "MYK2391", "kaliber": "9mm"}
+    },
+    {
+      "group_id": "item_kniv_spyderco_01",
+      "entity_type": "ITEM",
+      "variants": [
+        {
+          "text": "Spyderco kniv",
+          "normalized": "spyderco kniv",
+          "context": "Det ble funnet en Spyderco kniv under åstedsundersøkelsen."
+        },
+        {
+          "text": "Spyderco foldekniv",
+          "normalized": "spyderco foldekniv",
+          "context": "Vitnet forklarte at gjerningsmannen hadde en Spyderco foldekniv i hånden."
+        }
+      ],
+      "doc_ids": ["doc_202", "doc_218"],
+      "metadata": {"modell": "Paramilitary 2", "bladlengde_cm": 8.7}
+    },
+    {
+      "group_id": "item_ryggsekk_sort_01",
+      "entity_type": "ITEM",
+      "variants": [
+        {
+          "text": "svart ryggsekk",
+          "normalized": "svart ryggsekk",
+          "context": "Gjerningsmannen ble observert med en svart ryggsekk da han forlot bygningen."
+        },
+        {
+          "text": "sort ryggsekk",
+          "normalized": "sort ryggsekk",
+          "context": "Overvåkningskameraet fanget opp personen med sort ryggsekk kl. 23:47."
+        },
+        {
+          "text": "svart Osprey-sekk",
+          "normalized": "svart osprey-sekk",
+          "context": "I ryggsekken, en svart Osprey-sekk, ble det funnet 400 gram amfetamin."
+        }
+      ],
+      "doc_ids": ["doc_203", "doc_221"],
+      "metadata": {"farge": "sort", "merke": "Osprey"}
+    },
+    {
+      "group_id": "item_laptop_macbook_01",
+      "entity_type": "ITEM",
+      "variants": [
+        {
+          "text": "MacBook Pro 14",
+          "normalized": "macbook pro 14",
+          "context": "Politiet beslagla en MacBook Pro 14 fra siktedes kontor."
+        },
+        {
+          "text": "Apple MacBook Pro",
+          "normalized": "apple macbook pro",
+          "context": "Den krypterte Apple MacBook Pro sendes til Kripos for teknisk analyse."
+        },
+        {
+          "text": "MBP 14\"",
+          "normalized": "mbp 14\"",
+          "context": "Etterforskningstjenesten refererer til MBP 14\" i bevisprotokollen."
+        }
+      ],
+      "doc_ids": ["doc_204", "doc_224"],
+      "metadata": {"serienummer": "C02XY1234", "lagringskapasitet": "512GB SSD"}
+    },
+    {
+      "group_id": "item_rifle_winchester_01",
+      "entity_type": "ITEM",
+      "variants": [
+        {
+          "text": "Winchester rifle",
+          "normalized": "winchester rifle",
+          "context": "Winchester rifle ble funnet nedgravd i hagen til eiendommen."
+        },
+        {
+          "text": "Winchester .308",
+          "normalized": "winchester .308",
+          "context": "Eksperten bekreftet at Winchester .308 var uten lovlig registrering."
+        }
+      ],
+      "doc_ids": ["doc_205", "doc_227"],
+      "metadata": {"kaliber": ".308 Win", "registrert": false}
+    },
+    {
+      "group_id": "item_telefon_iphone_01",
+      "entity_type": "ITEM",
+      "variants": [
+        {
+          "text": "iPhone 13 Pro",
+          "normalized": "iphone 13 pro",
+          "context": "En iPhone 13 Pro ble beslaglagt som bevis under pågripelsen."
+        },
+        {
+          "text": "Apple iPhone 13",
+          "normalized": "apple iphone 13",
+          "context": "Apple iPhone 13 inneholder meldingshistorikk som er relevant for etterforskningen."
+        },
+        {
+          "text": "iPhone 13 Pro Max",
+          "normalized": "iphone 13 pro max",
+          "context": "Laboratoriet analyserte iPhone 13 Pro Max og fant krypterte bildefiler."
+        }
+      ],
+      "doc_ids": ["doc_206", "doc_230"],
+      "metadata": {"imei": "356938035643809", "farge": "sierra blue"}
+    },
+    {
+      "group_id": "item_sykkel_trek_01",
+      "entity_type": "ITEM",
+      "variants": [
+        {
+          "text": "Trek Marlin 7",
+          "normalized": "trek marlin 7",
+          "context": "Fluktkjøretøyet var en Trek Marlin 7 terrengsykkel, blå farge."
+        },
+        {
+          "text": "Trek Marlin MTB",
+          "normalized": "trek marlin mtb",
+          "context": "Vitnet beskrev fluktsykkelen som en Trek Marlin MTB."
+        }
+      ],
+      "doc_ids": ["doc_207", "doc_233"],
+      "metadata": {"farge": "blå", "rammenummer": "WTU8J0123456"}
+    },
+    {
+      "group_id": "item_veske_lv_01",
+      "entity_type": "ITEM",
+      "variants": [
+        {
+          "text": "Louis Vuitton veske",
+          "normalized": "louis vuitton veske",
+          "context": "En Louis Vuitton veske med 280 000 kr i kontanter ble beslaglagt."
+        },
+        {
+          "text": "LV Speedy-bag",
+          "normalized": "lv speedy-bag",
+          "context": "LV Speedy-bag ble identifisert som den stjålne gjenstanden fra hendelsen."
+        }
+      ],
+      "doc_ids": ["doc_208", "doc_236"],
+      "metadata": {"modell": "Speedy 30", "antatt_verdi_nok": 15000}
+    },
+    {
+      "group_id": "item_klokke_rolex_01",
+      "entity_type": "ITEM",
+      "variants": [
+        {
+          "text": "Rolex Submariner",
+          "normalized": "rolex submariner",
+          "context": "Rolex Submariner i rustfritt stål ble funnet i bankboks tilknyttet siktede."
+        },
+        {
+          "text": "Rolex 116610",
+          "normalized": "rolex 116610",
+          "context": "Modell Rolex 116610 er identifisert som bevis nr. B-0044 i saken."
+        },
+        {
+          "text": "Rolex Submariner Date",
+          "normalized": "rolex submariner date",
+          "context": "Vitnet gjenkjente Rolex Submariner Date på siktedes håndledd under møtet."
+        }
+      ],
+      "doc_ids": ["doc_209", "doc_239"],
+      "metadata": {"serienummer": "V456123", "modellnummer": "116610LN"}
+    },
+    {
+      "group_id": "item_kontanter_01",
+      "entity_type": "ITEM",
+      "variants": [
+        {
+          "text": "50 000 kr i kontanter",
+          "normalized": "50000 kr i kontanter",
+          "context": "Det ble funnet 50 000 kr i kontanter gjemt bak en vegg i garasjen."
+        },
+        {
+          "text": "kr 50.000,-",
+          "normalized": "kr 50000",
+          "context": "Regnskapet viser en utbetaling på kr 50.000,- til ukjent mottaker."
+        }
+      ],
+      "doc_ids": ["doc_210", "doc_242"],
+      "metadata": {"valuta": "NOK", "beløp": 50000}
+    },
+    {
+      "group_id": "item_narkotika_kokain_01",
+      "entity_type": "ITEM",
+      "variants": [
+        {
+          "text": "hvitt pulver",
+          "normalized": "hvitt pulver",
+          "context": "Det ble funnet et hvitt pulver i en ziplock-pose under ransaking av bilen."
+        },
+        {
+          "text": "kokain",
+          "normalized": "kokain",
+          "context": "Laboratorieanalyse bekrefter at det hvite pulveret er kokain av høy renhet."
+        },
+        {
+          "text": "420 gram stoff",
+          "normalized": "420 gram stoff",
+          "context": "Politiet beslagla totalt 420 gram stoff mistenkt for å være kokain."
+        }
+      ],
+      "doc_ids": ["doc_211", "doc_245"],
+      "metadata": {"vekt_gram": 420, "renhet_prosent": 74}
+    },
+    {
+      "group_id": "item_sprøyte_brukt_01",
+      "entity_type": "ITEM",
+      "variants": [
+        {
+          "text": "brukt sprøyte",
+          "normalized": "brukt sprøyte",
+          "context": "Det ble funnet en brukt sprøyte under teppet i leiligheten."
+        },
+        {
+          "text": "brukt kanyle",
+          "normalized": "brukt kanyle",
+          "context": "Den brukte kanylen er sendt til DNA-analyse ved Rettsmedisinsk institutt."
+        }
+      ],
+      "doc_ids": ["doc_213", "doc_248"],
+      "metadata": {"funn_sted": "Oslo sentrum leilighet", "dna_sendt": true}
+    },
+    {
+      "group_id": "item_pass_norsk_01",
+      "entity_type": "ITEM",
+      "variants": [
+        {
+          "text": "norsk pass",
+          "normalized": "norsk pass",
+          "context": "Et norsk pass tilhørende en annen person ble funnet i siktedes bagasje."
+        },
+        {
+          "text": "falskt reisedokument",
+          "normalized": "falskt reisedokument",
+          "context": "Det norske passet er trolig et falskt reisedokument med endret foto."
+        }
+      ],
+      "doc_ids": ["doc_214", "doc_251"],
+      "metadata": {"passnummer": "NX123456", "utstedelsesland": "NO", "mistanke": "forfalsket"}
+    },
+    {
+      "group_id": "comm_telefon_01",
+      "entity_type": "COMM",
+      "variants": [
+        {
+          "text": "+47 912 34 567",
+          "normalized": "+4791234567",
+          "context": "Nummeret +47 912 34 567 ble brukt til å koordinere leveringen av narkotikaen."
+        },
+        {
+          "text": "91234567",
+          "normalized": "91234567",
+          "context": "Avlytting av 91234567 avdekket kommunikasjon mellom to av de siktede."
+        },
+        {
+          "text": "912 34 567",
+          "normalized": "91234567",
+          "context": "Vitnet oppga at avsender ringte fra 912 34 567 dagen før hendelsen."
+        }
+      ],
+      "doc_ids": ["doc_301", "doc_315"],
+      "metadata": {"operatør": "Telenor", "type": "mobiltelefon"}
+    },
+    {
+      "group_id": "comm_epost_larsb_01",
+      "entity_type": "COMM",
+      "variants": [
+        {
+          "text": "lars.berg@gmail.com",
+          "normalized": "lars.berg@gmail.com",
+          "context": "Kontoen lars.berg@gmail.com ble brukt til å sende instruksjoner til kurerne."
+        },
+        {
+          "text": "l.berg@gmail.com",
+          "normalized": "l.berg@gmail.com",
+          "context": "En annen e-postadresse, l.berg@gmail.com, ser ut til å tilhøre samme bruker."
+        }
+      ],
+      "doc_ids": ["doc_302", "doc_318"],
+      "metadata": {"leverandør": "Gmail", "type": "e-post"}
+    },
+    {
+      "group_id": "comm_telegram_darkwolf_01",
+      "entity_type": "COMM",
+      "variants": [
+        {
+          "text": "@darkwolf99",
+          "normalized": "@darkwolf99",
+          "context": "Brukeren @darkwolf99 på Telegram er mistenkt for å ha solgt narkotika."
+        },
+        {
+          "text": "darkwolf99",
+          "normalized": "darkwolf99",
+          "context": "Chatlogger viser at darkwolf99 koordinerte leveranser i Oslo-området."
+        }
+      ],
+      "doc_ids": ["doc_303", "doc_321"],
+      "metadata": {"plattform": "Telegram", "type": "brukernavn"}
+    },
+    {
+      "group_id": "comm_telefon_02",
+      "entity_type": "COMM",
+      "variants": [
+        {
+          "text": "+47 934 56 789",
+          "normalized": "+4793456789",
+          "context": "Nummeret +47 934 56 789 ringte siktede fem ganger rett før hendelsen."
+        },
+        {
+          "text": "934 56 789",
+          "normalized": "93456789",
+          "context": "Vitnet mottok en truende melding fra 934 56 789 samme kveld."
+        },
+        {
+          "text": "93456789",
+          "normalized": "93456789",
+          "context": "Teleoperatøren identifiserte 93456789 som et kontantkort kjøpt anonymt."
+        }
+      ],
+      "doc_ids": ["doc_304", "doc_324"],
+      "metadata": {"operatør": "Telia", "type": "kontantkort"}
+    },
+    {
+      "group_id": "comm_epost_karij_01",
+      "entity_type": "COMM",
+      "variants": [
+        {
+          "text": "kari.j@hotmail.no",
+          "normalized": "kari.j@hotmail.no",
+          "context": "E-postadressen kari.j@hotmail.no ble brukt til å motta betalingsbekreftelser."
+        },
+        {
+          "text": "karij@hotmail.no",
+          "normalized": "karij@hotmail.no",
+          "context": "Politiet knytter karij@hotmail.no til samme person basert på IP-adresselogg."
+        }
+      ],
+      "doc_ids": ["doc_305", "doc_327"],
+      "metadata": {"leverandør": "Hotmail", "type": "e-post"}
+    },
+    {
+      "group_id": "comm_snap_erikk_01",
+      "entity_type": "COMM",
+      "variants": [
+        {
+          "text": "snap: erikk93",
+          "normalized": "erikk93",
+          "context": "Siktede kommuniserte med kunder via Snapchat-brukeren erikk93."
+        },
+        {
+          "text": "Snapchat erikk93",
+          "normalized": "erikk93",
+          "context": "Snapchat erikk93 er knyttet til salg av syntetiske rusmidler."
+        }
+      ],
+      "doc_ids": ["doc_306", "doc_330"],
+      "metadata": {"plattform": "Snapchat", "type": "brukernavn"}
+    },
+    {
+      "group_id": "veh_bmw_ab12345_01",
+      "entity_type": "VEH",
+      "variants": [
+        {
+          "text": "AB 12345",
+          "normalized": "ab 12345",
+          "context": "Kjøretøyet med kjennemerke AB 12345 ble observert på åstedet."
+        },
+        {
+          "text": "AB12345",
+          "normalized": "ab12345",
+          "context": "Tollregisteret viser at AB12345 krysset grensen fra Sverige 3. april."
+        },
+        {
+          "text": "BMW 3-serie AB 12345",
+          "normalized": "bmw 3-serie ab 12345",
+          "context": "Siktede er registrert eier av BMW 3-serie AB 12345 årsmodell 2019."
+        }
+      ],
+      "doc_ids": ["doc_401", "doc_415"],
+      "metadata": {"regnr": "AB12345", "merke": "BMW", "modell": "3-serie", "årsmodell": 2019}
+    },
+    {
+      "group_id": "veh_toyota_cd67890_01",
+      "entity_type": "VEH",
+      "variants": [
+        {
+          "text": "CD 67890",
+          "normalized": "cd 67890",
+          "context": "En Toyota Camry med kjennemerke CD 67890 ble stoppet i tollkontrollen."
+        },
+        {
+          "text": "CD67890",
+          "normalized": "cd67890",
+          "context": "CD67890 er registrert på et leiebilselskap ifølge vegvesenets register."
+        },
+        {
+          "text": "Toyota Camry CD 67890",
+          "normalized": "toyota camry cd 67890",
+          "context": "Toyota Camry CD 67890 hadde falske skilter påmontert."
+        }
+      ],
+      "doc_ids": ["doc_402", "doc_418"],
+      "metadata": {"regnr": "CD67890", "merke": "Toyota", "modell": "Camry", "årsmodell": 2020}
+    },
+    {
+      "group_id": "veh_mercedes_ef11223_01",
+      "entity_type": "VEH",
+      "variants": [
+        {
+          "text": "EF 11223",
+          "normalized": "ef 11223",
+          "context": "Mercedes EF 11223 ble observert parkert utenfor banken i én time."
+        },
+        {
+          "text": "EF11223",
+          "normalized": "ef11223",
+          "context": "Kamerasystemet registrerte EF11223 to ganger samme natt."
+        }
+      ],
+      "doc_ids": ["doc_403", "doc_421"],
+      "metadata": {"regnr": "EF11223", "merke": "Mercedes-Benz", "modell": "C220d"}
+    },
+    {
+      "group_id": "veh_ford_gh44556_01",
+      "entity_type": "VEH",
+      "variants": [
+        {
+          "text": "GH 44556",
+          "normalized": "gh 44556",
+          "context": "Ford Focus med kjennemerke GH 44556 ble brukt under ransforsøket."
+        },
+        {
+          "text": "Ford Focus GH44556",
+          "normalized": "ford focus gh44556",
+          "context": "Ford Focus GH44556 ble funnet forlatt i en garasje i Groruddalen."
+        }
+      ],
+      "doc_ids": ["doc_404", "doc_424"],
+      "metadata": {"regnr": "GH44556", "merke": "Ford", "modell": "Focus", "farge": "sølv"}
+    },
+    {
+      "group_id": "veh_audi_ij77889_01",
+      "entity_type": "VEH",
+      "variants": [
+        {
+          "text": "IJ 77889",
+          "normalized": "ij 77889",
+          "context": "Audi A4 med kjennemerke IJ 77889 ble brukt i transporten av narkotikaen."
+        },
+        {
+          "text": "IJ77889",
+          "normalized": "ij77889",
+          "context": "IJ77889 er registrert i politiets ANPR-logg ved tre ulike grensepasseringer."
+        },
+        {
+          "text": "Audi A4 IJ 77889",
+          "normalized": "audi a4 ij 77889",
+          "context": "Siktedes Audi A4 IJ 77889 ble gjennomsøkt og det ble funnet skjult rom."
+        }
+      ],
+      "doc_ids": ["doc_405", "doc_427"],
+      "metadata": {"regnr": "IJ77889", "merke": "Audi", "modell": "A4", "årsmodell": 2018}
+    },
+    {
+      "group_id": "loc_oslo_storgata_01",
+      "entity_type": "LOC",
+      "variants": [
+        {
+          "text": "Storgata 5, Oslo",
+          "normalized": "storgata 5 oslo",
+          "context": "Hendelsen fant sted i Storgata 5, Oslo, i første etasje av bygget."
+        },
+        {
+          "text": "Storgata 5, 0182 Oslo",
+          "normalized": "storgata 5 0182 oslo",
+          "context": "Adressen Storgata 5, 0182 Oslo er registrert som bostedsadresse for siktede."
+        },
+        {
+          "text": "Storgata 5",
+          "normalized": "storgata 5",
+          "context": "Ransaking av Storgata 5 ble gjennomført 22. mai kl. 07:00."
+        }
+      ],
+      "doc_ids": ["doc_501", "doc_512"],
+      "metadata": {"kommune": "Oslo", "postnummer": "0182"}
+    },
+    {
+      "group_id": "loc_bergen_bryggen_01",
+      "entity_type": "LOC",
+      "variants": [
+        {
+          "text": "Bryggen, Bergen",
+          "normalized": "bryggen bergen",
+          "context": "Overleveringen fant sted ved Bryggen, Bergen, rett etter midnatt."
+        },
+        {
+          "text": "Bryggen i Bergen",
+          "normalized": "bryggen i bergen",
+          "context": "Overvåkningskameraet på Bryggen i Bergen fanget opp de to personene."
+        }
+      ],
+      "doc_ids": ["doc_502", "doc_515"],
+      "metadata": {"kommune": "Bergen", "bydel": "Bergenhus"}
+    },
+    {
+      "group_id": "loc_trondheim_elvehavn_01",
+      "entity_type": "LOC",
+      "variants": [
+        {
+          "text": "Nedre Elvehavn, Trondheim",
+          "normalized": "nedre elvehavn trondheim",
+          "context": "Pengene ble overlevert på Nedre Elvehavn, Trondheim, mellom to uidentifiserte menn."
+        },
+        {
+          "text": "Nedre Elvehavn",
+          "normalized": "nedre elvehavn",
+          "context": "Vitnet hevder å ha observert transaksjonen på Nedre Elvehavn ca. kl. 21:00."
+        }
+      ],
+      "doc_ids": ["doc_503", "doc_518"],
+      "metadata": {"kommune": "Trondheim", "bydel": "Nedre Elvehavn"}
+    },
+    {
+      "group_id": "loc_stavanger_sentrum_01",
+      "entity_type": "LOC",
+      "variants": [
+        {
+          "text": "Stavanger sentrum",
+          "normalized": "stavanger sentrum",
+          "context": "Det mistenkte møtestedet ble lokalisert til Stavanger sentrum."
+        },
+        {
+          "text": "Stavanger",
+          "normalized": "stavanger",
+          "context": "Siktede er bosatt i Stavanger og ble pågrepet der 7. november."
+        }
+      ],
+      "doc_ids": ["doc_504", "doc_521"],
+      "metadata": {"kommune": "Stavanger"}
+    },
+    {
+      "group_id": "org_dnb_01",
+      "entity_type": "ORG",
+      "variants": [
+        {
+          "text": "DNB ASA",
+          "normalized": "dnb asa",
+          "context": "Kontoene ble opprettet i DNB ASA og brukt til hvitvasking av penger."
+        },
+        {
+          "text": "DNB",
+          "normalized": "dnb",
+          "context": "DNB bekreftet at mistenkelige transaksjoner ble rapportert til Finanstilsynet."
+        },
+        {
+          "text": "Den Norske Bank",
+          "normalized": "den norske bank",
+          "context": "Opprinnelig opprettet under navnet Den Norske Bank, er kontoen nå fryst."
+        }
+      ],
+      "doc_ids": ["doc_601", "doc_612"],
+      "metadata": {"orgnr": "984851006", "bransje": "finans"}
+    },
+    {
+      "group_id": "org_hydro_01",
+      "entity_type": "ORG",
+      "variants": [
+        {
+          "text": "Norsk Hydro",
+          "normalized": "norsk hydro",
+          "context": "Fakturaer adressert til Norsk Hydro viste seg å være falske."
+        },
+        {
+          "text": "Hydro ASA",
+          "normalized": "hydro asa",
+          "context": "Selskapet Hydro ASA er brukt som dekknavn i en fakturasvindel."
+        },
+        {
+          "text": "HYDRO",
+          "normalized": "hydro",
+          "context": "Avsenders brevhode lyder HYDRO, men selskapet bekrefter å ikke ha sendt fakturaen."
+        }
+      ],
+      "doc_ids": ["doc_602", "doc_615"],
+      "metadata": {"orgnr": "910526551", "bransje": "aluminium og energi"}
+    },
+    {
+      "group_id": "org_nordic_logistics_01",
+      "entity_type": "ORG",
+      "variants": [
+        {
+          "text": "Nordic Logistics AS",
+          "normalized": "nordic logistics as",
+          "context": "Nordic Logistics AS er registrert som transportør i tolldeklarasjonene."
+        },
+        {
+          "text": "Nordic Log.",
+          "normalized": "nordic log",
+          "context": "Nordic Log. er antatt stråselskap brukt i smuglingsopplegget."
+        }
+      ],
+      "doc_ids": ["doc_603", "doc_618"],
+      "metadata": {"orgnr": "923456789", "bransje": "transport"}
+    },
+    {
+      "group_id": "fin_konto_01",
+      "entity_type": "FIN",
+      "variants": [
+        {
+          "text": "1234.56.78901",
+          "normalized": "1234.56.78901",
+          "context": "Konto 1234.56.78901 mottok totalt 3,2 millioner kroner i perioden."
+        },
+        {
+          "text": "12345678901",
+          "normalized": "12345678901",
+          "context": "Bankutskriftene for konto 12345678901 er beslaglagt som bevis."
+        },
+        {
+          "text": "konto nr. 1234.56.78901",
+          "normalized": "1234.56.78901",
+          "context": "Overføringene til konto nr. 1234.56.78901 skjedde ukentlig i tre måneder."
+        }
+      ],
+      "doc_ids": ["doc_701", "doc_712"],
+      "metadata": {"bank": "DNB ASA", "kontonummer": "12345678901", "valuta": "NOK"}
+    },
+    {
+      "group_id": "fin_konto_02",
+      "entity_type": "FIN",
+      "variants": [
+        {
+          "text": "9876.54.32100",
+          "normalized": "9876.54.32100",
+          "context": "Konto 9876.54.32100 i Nordea ble brukt til å motta utenlandske overføringer."
+        },
+        {
+          "text": "98765432100",
+          "normalized": "98765432100",
+          "context": "Transaksjonshistorikken for 98765432100 viser overføringer fra Latvia og Litauen."
+        }
+      ],
+      "doc_ids": ["doc_702", "doc_715"],
+      "metadata": {"bank": "Nordea", "kontonummer": "98765432100", "valuta": "NOK"}
+    }
+  ],
+  "hard_negatives": [
+    {
+      "group_id_a": "per_berg_lars_01",
+      "group_id_b": "per_berg_lars_02",
+      "reason": "Identisk navn 'Lars Berg', men ulike fødselsnummer og ulike saker — klassisk navnekollisjons-negativ"
+    },
+    {
+      "group_id_a": "per_johansen_kari_01",
+      "group_id_b": "per_johansen_kari_02",
+      "reason": "Samme fornavn og etternavn 'Kari Johansen', men ulike fødselsnummer og sakstilknytning"
+    },
+    {
+      "group_id_a": "per_olsen_erik_01",
+      "group_id_b": "per_olsen_erik_02",
+      "reason": "Identisk navn 'Erik Olsen', men ulike fnr og kontekst — vanlig norsk navn med høy kollisjonsrisiko"
+    },
+    {
+      "group_id_a": "per_andersen_tor_01",
+      "group_id_b": "per_andersen_tor_02",
+      "reason": "Samme navn 'Tor Andersen', ulike fødselsnummer og saker"
+    },
+    {
+      "group_id_a": "per_larsen_morten_01",
+      "group_id_b": "per_larsen_morten_02",
+      "reason": "'Morten Larsen' er et vanlig navn; de to personene har ulike roller og fnr"
+    },
+    {
+      "group_id_a": "per_nielsen_anne_01",
+      "group_id_b": "per_nielsen_anne_02",
+      "reason": "Identisk navn 'Anne Nielsen', men ulike fødselsnummer og ulike sakstilknytninger"
+    },
+    {
+      "group_id_a": "comm_telefon_01",
+      "group_id_b": "comm_telefon_02",
+      "reason": "To ulike mobilnummer med lignende formatering; begge brukt i kriminell kommunikasjon men av ulike personer"
+    },
+    {
+      "group_id_a": "org_dnb_01",
+      "group_id_b": "org_hydro_01",
+      "reason": "Begge er store norske ASA-selskaper med kjente varianter; overflatisk likhet i organisasjonsform"
+    },
+    {
+      "group_id_a": "item_pistol_glock_01",
+      "group_id_b": "item_rifle_winchester_01",
+      "reason": "Begge er beslaglagte skytevåpen i separate saker; forskjellig type og serienummer"
+    },
+    {
+      "group_id_a": "veh_bmw_ab12345_01",
+      "group_id_b": "veh_audi_ij77889_01",
+      "reason": "To ulike kjøretøy med like korte kjennemerkeformater; begge brukt i narkotikaransport men av ulike eiere"
+    }
+  ]
+}
