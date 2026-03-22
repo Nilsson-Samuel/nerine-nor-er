@@ -22,7 +22,6 @@ from src.synthetic.build_matching_dataset import (
 )
 from src.synthetic.validate import validate_synthetic_data
 
-
 _IDENTITY_GROUPS_PAYLOAD = {
     "run_id": "run_synthetic",
     "groups": [
@@ -172,11 +171,13 @@ def test_validate_synthetic_data_detects_pair_entity_reference_drift(
     issues = validate_synthetic_data(data_dir)
 
     assert any(
-        issue == "candidate_pairs.parquet: row 1: entity_id_a must reference entities.parquet"
+        issue
+        == "candidate_pairs.parquet: row 1: entity_id_a must reference entities.parquet"
         for issue in issues
     )
     assert any(
-        issue == "candidate_pairs.parquet: row 1: entity_id_b must reference entities.parquet"
+        issue
+        == "candidate_pairs.parquet: row 1: entity_id_b must reference entities.parquet"
         for issue in issues
     )
     assert any(
@@ -274,16 +275,35 @@ def test_load_labeled_feature_matrix_has_zero_row_loss(
     synthetic_data_dir: tuple[Path, str],
 ) -> None:
     data_dir, run_id = synthetic_data_dir
-    labels = pl.read_parquet(data_dir / "labels.parquet").filter(pl.col("run_id") == run_id)
+    labels = pl.read_parquet(data_dir / "labels.parquet").filter(
+        pl.col("run_id") == run_id
+    )
     run_features(data_dir, run_id)
 
     x_matrix, y_vector = load_labeled_feature_matrix(data_dir, run_id)
     features = pl.read_parquet(get_features_output_path(data_dir, run_id))
-    joined = features.join(labels, on=["run_id", "entity_id_a", "entity_id_b"], how="inner")
+    joined = features.join(
+        labels, on=["run_id", "entity_id_a", "entity_id_b"], how="inner"
+    )
 
     assert x_matrix.columns == FEATURE_COLUMNS
     assert x_matrix.height == y_vector.len() == labels.height
     assert joined.height == features.height == labels.height
+
+
+def test_load_labeled_feature_matrix_allows_unlabeled_feature_rows(
+    synthetic_data_dir: tuple[Path, str],
+) -> None:
+    data_dir, run_id = synthetic_data_dir
+    run_features(data_dir, run_id)
+
+    labels = pl.read_parquet(data_dir / "labels.parquet")
+    labels.slice(1).write_parquet(data_dir / "labels.parquet")
+
+    x_matrix, y_vector = load_labeled_feature_matrix(data_dir, run_id)
+
+    assert x_matrix.columns == FEATURE_COLUMNS
+    assert x_matrix.height == y_vector.len() == labels.height - 1
 
 
 def test_load_labeled_feature_matrix_rejects_duplicate_feature_keys(
@@ -291,10 +311,14 @@ def test_load_labeled_feature_matrix_rejects_duplicate_feature_keys(
 ) -> None:
     data_dir, run_id = synthetic_data_dir
     features = run_features(data_dir, run_id)
-    corrupted = pl.concat([features.slice(0, 1), features.slice(0, 1), features.slice(2)])
+    corrupted = pl.concat(
+        [features.slice(0, 1), features.slice(0, 1), features.slice(2)]
+    )
     corrupted.write_parquet(get_features_output_path(data_dir, run_id))
 
-    with pytest.raises(ValueError, match="features.parquet contains duplicate pair keys"):
+    with pytest.raises(
+        ValueError, match="features.parquet contains duplicate pair keys"
+    ):
         load_labeled_feature_matrix(data_dir, run_id)
 
 
@@ -319,17 +343,23 @@ def test_load_labeled_feature_matrix_rejects_missing_feature_keys_even_when_row_
 ) -> None:
     data_dir, run_id = synthetic_data_dir
     features = run_features(data_dir, run_id)
-    corrupted = features.with_row_index("row_idx").with_columns(
-        pl.when(pl.col("row_idx") == 0)
-        .then(pl.lit("0" * 32))
-        .otherwise(pl.col("entity_id_a"))
-        .alias("entity_id_a"),
-        pl.when(pl.col("row_idx") == 0)
-        .then(pl.lit("1" * 32))
-        .otherwise(pl.col("entity_id_b"))
-        .alias("entity_id_b"),
-    ).drop("row_idx")
+    corrupted = (
+        features.with_row_index("row_idx")
+        .with_columns(
+            pl.when(pl.col("row_idx") == 0)
+            .then(pl.lit("0" * 32))
+            .otherwise(pl.col("entity_id_a"))
+            .alias("entity_id_a"),
+            pl.when(pl.col("row_idx") == 0)
+            .then(pl.lit("1" * 32))
+            .otherwise(pl.col("entity_id_b"))
+            .alias("entity_id_b"),
+        )
+        .drop("row_idx")
+    )
     corrupted.write_parquet(get_features_output_path(data_dir, run_id))
 
-    with pytest.raises(ValueError, match="features.parquet is missing keys from labels.parquet"):
+    with pytest.raises(
+        ValueError, match="features.parquet is missing keys from labels.parquet"
+    ):
         load_labeled_feature_matrix(data_dir, run_id)
