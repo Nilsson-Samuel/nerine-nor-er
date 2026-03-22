@@ -3,10 +3,16 @@
 from pathlib import Path
 
 import numpy as np
+import pyarrow.parquet as pq
 import pytest
 
+from src.blocking.embeddings import persist_embedding_artifacts
 from src.matching.features import build_embedding_id_index, load_embedding_artifacts
-from src.shared.fixtures import write_mock_handoff
+from src.shared.fixtures import (
+    build_mock_embedding_artifacts,
+    build_mock_entities,
+    write_mock_handoff,
+)
 
 
 @pytest.fixture()
@@ -21,6 +27,28 @@ def test_load_embedding_artifacts_happy_path(handoff_dir: Path) -> None:
     assert artifacts.embeddings.shape == artifacts.context_embeddings.shape
     assert artifacts.embeddings.shape[1] == 768
     assert artifacts.embeddings.shape[0] == len(artifacts.embedding_entity_ids)
+
+
+def test_load_embedding_artifacts_accepts_blocking_writer_output(tmp_path: Path) -> None:
+    entities = build_mock_entities()
+    embeddings, context_embeddings, embedding_entity_ids = build_mock_embedding_artifacts(
+        entities
+    )
+    pq.write_table(entities, tmp_path / "entities.parquet")
+
+    persist_embedding_artifacts(
+        entity_ids=embedding_entity_ids.tolist(),
+        embeddings=embeddings,
+        context_embeddings=context_embeddings,
+        out_dir=tmp_path,
+    )
+
+    artifacts = load_embedding_artifacts(tmp_path)
+
+    assert artifacts.embedding_entity_ids.dtype.kind == "U"
+    assert artifacts.embedding_entity_ids.tolist() == embedding_entity_ids.tolist()
+    assert np.allclose(artifacts.embeddings, embeddings)
+    assert np.allclose(artifacts.context_embeddings, context_embeddings)
 
 
 def test_load_embedding_artifacts_rejects_row_count_mismatch(handoff_dir: Path) -> None:
