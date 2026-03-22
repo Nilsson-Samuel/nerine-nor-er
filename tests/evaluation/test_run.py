@@ -737,6 +737,33 @@ def test_run_evaluation_writes_report_and_labels(tmp_path: Path) -> None:
     assert report["metrics"]["pairwise_f1"] == 0.4
 
 
+def test_run_evaluation_filters_shared_training_labels_by_allowed_doc_ids(
+    tmp_path: Path,
+) -> None:
+    run_id = "eval_run_filtered_labels_001"
+    data_dir = _write_case_artifacts(tmp_path, run_id)
+    gold_path = tmp_path / "gold_annotations.csv"
+    shared_labels_path = tmp_path / "shared_labels.parquet"
+    _write_gold_csv(gold_path)
+
+    run_evaluation(
+        data_dir=data_dir,
+        run_id=run_id,
+        gold_path=gold_path,
+        shared_labels_path=shared_labels_path,
+        shared_labels_allowed_doc_ids=[_hex32(1)],
+    )
+
+    full_labels = pq.read_table(get_evaluation_labels_path(data_dir, run_id)).to_pylist()
+    shared_labels = pq.read_table(shared_labels_path).to_pylist()
+
+    assert len(full_labels) == 6
+    assert len(shared_labels) == 1
+    assert shared_labels[0]["entity_id_a"] == _hex32(21)
+    assert shared_labels[0]["entity_id_b"] == _hex32(22)
+    assert shared_labels[0]["label"] == 0
+
+
 def test_run_evaluation_scores_only_confidently_bridged_subset(
     tmp_path: Path,
 ) -> None:

@@ -80,6 +80,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         default=None,
         help="Optional shared labels.parquet path to merge this run into for later training.",
     )
+    parser.add_argument(
+        "--shared-labels-allowed-doc-ids",
+        nargs="+",
+        default=None,
+        help="Optional doc_id allowlist for labels written to --shared-labels-path.",
+    )
     return parser.parse_args(argv)
 
 
@@ -111,6 +117,7 @@ def run_evaluation(
     match_threshold: float = DEFAULT_MATCH_THRESHOLD,
     baseline_report_path: Path | str | None = None,
     shared_labels_path: Path | str | None = None,
+    shared_labels_allowed_doc_ids: Sequence[str] | None = None,
 ) -> dict[str, Any]:
     """Evaluate one completed run and write the per-run report."""
     if not 0.0 <= match_threshold <= 1.0:
@@ -147,6 +154,10 @@ def run_evaluation(
     }
     bridge_summary["matched_mentions_by_method"] = match_method_counts
 
+    entity_doc_id_by_entity = {
+        str(row["entity_id"]): str(row["doc_id"])
+        for row in entities.select(["entity_id", "doc_id"]).iter_rows(named=True)
+    }
     labels_table = _build_labels_table(candidate_pairs, gold_group_by_entity)
     bridge_summary["label_rows_written"] = labels_table.num_rows
     bridge_summary["candidate_pairs_excluded_from_labels"] = (
@@ -154,7 +165,17 @@ def run_evaluation(
     )
     _write_parquet_atomic(labels_table, labels_path)
     if shared_labels_path is not None:
-        _merge_labels_into_shared_store(labels_table, Path(shared_labels_path), run_id)
+        shared_labels_table = _build_labels_table(
+            candidate_pairs,
+            gold_group_by_entity,
+            entity_doc_id_by_entity=entity_doc_id_by_entity,
+            allowed_doc_ids=shared_labels_allowed_doc_ids,
+        )
+        _merge_labels_into_shared_store(
+            shared_labels_table,
+            Path(shared_labels_path),
+            run_id,
+        )
 
     predicted_cluster_by_entity = _cluster_membership_from_resolved(
         resolved_entities, entities
@@ -926,8 +947,15 @@ def _filter_labelable_gold_groups(
 def _build_labels_table(
     candidate_pairs: pl.DataFrame,
     gold_group_by_entity: Mapping[str, str],
+    *,
+    entity_doc_id_by_entity: Mapping[str, str] | None = None,
+    allowed_doc_ids: Sequence[str] | None = None,
 ) -> pa.Table:
     """Build a strict-schema labels table from confidently bridged candidate pairs."""
+    allowed_doc_id_set = None
+    if allowed_doc_ids is not None:
+        allowed_doc_id_set = {str(doc_id) for doc_id in allowed_doc_ids}
+
     run_ids: list[str] = []
     entity_ids_a: list[str] = []
     entity_ids_b: list[str] = []
@@ -935,6 +963,16 @@ def _build_labels_table(
     for row in candidate_pairs.iter_rows(named=True):
         entity_id_a = str(row["entity_id_a"])
         entity_id_b = str(row["entity_id_b"])
+        if allowed_doc_id_set is not None:
+            if entity_doc_id_by_entity is None:
+                raise ValueError(
+                    "entity_doc_id_by_entity is required when allowed_doc_ids is set"
+                )
+            if (
+                entity_doc_id_by_entity[entity_id_a] not in allowed_doc_id_set
+                or entity_doc_id_by_entity[entity_id_b] not in allowed_doc_id_set
+            ):
+                continue
         group_id_a = gold_group_by_entity[entity_id_a]
         group_id_b = gold_group_by_entity[entity_id_b]
         if not (
@@ -1097,6 +1135,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         match_threshold=args.match_threshold,
         baseline_report_path=args.baseline_report,
         shared_labels_path=args.shared_labels_path,
+        shared_labels_allowed_doc_ids=args.shared_labels_allowed_doc_ids,
     )
     return 0 if report["regression_checks"]["passed"] else 1
 
