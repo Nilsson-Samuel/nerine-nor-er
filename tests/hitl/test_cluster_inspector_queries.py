@@ -274,6 +274,28 @@ def test_load_cluster_members_empty_for_missing_files(tmp_path: Path) -> None:
     assert members.is_empty()
 
 
+def test_load_cluster_members_tolerates_missing_optional_columns(
+    tmp_path: Path,
+) -> None:
+    pq.write_table(
+        _build_entities_table().drop_columns(["context", "char_end"]),
+        tmp_path / "entities.parquet",
+    )
+
+    resolution_dir = get_resolution_run_output_dir(tmp_path, RUN_ID)
+    resolution_dir.mkdir(parents=True, exist_ok=True)
+    pq.write_table(
+        _build_resolved_entities_table(),
+        resolution_dir / "resolved_entities.parquet",
+    )
+
+    members = load_cluster_members(tmp_path, RUN_ID, CLUSTER_A)
+
+    assert members.height == 3
+    assert "context" not in members.columns
+    assert "char_end" not in members.columns
+
+
 # ── load_cluster_edges ───────────────────────────────────────────────────────
 
 

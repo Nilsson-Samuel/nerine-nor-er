@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 import polars as pl
+import pyarrow as pa
 
 import pyarrow.parquet as pq
 
@@ -69,6 +70,7 @@ _MEMBER_COLUMNS = [
     "char_end",
 ]
 _EDGE_COLUMNS = ["entity_id_a", "entity_id_b", "score", "blocking_source", "shap_top5"]
+_PARQUET_READ_EXCEPTIONS = (OSError, pa.ArrowInvalid, pl.exceptions.PolarsError)
 
 
 def _decode_run_id(dir_name: str) -> str | None:
@@ -176,6 +178,20 @@ def load_cluster_frame_safe(data_dir: Path, run_id: str) -> tuple[pl.DataFrame, 
         )
 
 
+def _route_column_for_profile(profile: str) -> str:
+    """Resolve one supported routing profile to its column name."""
+    col = PROFILE_ROUTE_COLUMN.get(profile)
+    if col is None:
+        raise ValueError(f"Unsupported routing profile: {profile}")
+    return col
+
+
+def _available_columns(path: Path, desired: list[str]) -> list[str]:
+    """Keep only columns that exist in the parquet schema."""
+    schema_names = set(pq.read_schema(path).names)
+    return [col for col in desired if col in schema_names]
+
+
 def filter_by_bucket(
     frame: pl.DataFrame,
     profile: str,
@@ -191,7 +207,7 @@ def filter_by_bucket(
     Returns:
         Filtered DataFrame containing only matching clusters.
     """
-    col = PROFILE_ROUTE_COLUMN[profile]
+    col = _route_column_for_profile(profile)
     return frame.filter(pl.col(col) == bucket)
 
 
@@ -205,7 +221,7 @@ def bucket_counts(frame: pl.DataFrame, profile: str) -> dict[str, int]:
     Returns:
         Mapping from bucket name to cluster count.
     """
-    col = PROFILE_ROUTE_COLUMN[profile]
+    col = _route_column_for_profile(profile)
     counts = frame.group_by(col).len().sort(col)
     return {
         str(row[col]): int(row["len"])
@@ -282,7 +298,7 @@ def load_cluster_member_ids(
                 filters=[("cluster_id", "==", cluster_id)],
             )
         )
-    except Exception as exc:
+    except _PARQUET_READ_EXCEPTIONS as exc:
         logger.warning("Could not read parquet for member IDs: %s", exc)
         return []
 
@@ -312,17 +328,20 @@ def load_cluster_members(
         return pl.DataFrame()
 
     try:
+        keep_cols = _available_columns(entities_path, _MEMBER_COLUMNS)
+        if "entity_id" not in keep_cols:
+            return pl.DataFrame()
         entities = pl.from_arrow(
             pq.read_table(
                 entities_path,
-                columns=_MEMBER_COLUMNS,
+                columns=keep_cols,
                 filters=[
                     ("run_id", "==", run_id),
                     ("entity_id", "in", member_ids),
                 ],
             )
         )
-    except Exception as exc:
+    except _PARQUET_READ_EXCEPTIONS as exc:
         logger.warning("Could not read parquet for members: %s", exc)
         return pl.DataFrame()
 
@@ -350,8 +369,7 @@ def load_cluster_edges(
         return pl.DataFrame()
 
     try:
-        scored_schema = pq.read_schema(scored_path).names
-        keep_cols = [col for col in _EDGE_COLUMNS if col in scored_schema]
+        keep_cols = _available_columns(scored_path, _EDGE_COLUMNS)
         scored = pl.from_arrow(
             pq.read_table(
                 scored_path,
@@ -362,7 +380,7 @@ def load_cluster_edges(
                 ],
             )
         )
-    except Exception as exc:
+    except _PARQUET_READ_EXCEPTIONS as exc:
         logger.warning("Could not read parquet for edges: %s", exc)
         return pl.DataFrame()
 
@@ -410,7 +428,7 @@ def load_doc_paths(data_dir: Path, run_id: str) -> dict[str, str]:
 
     try:
         table = pl.from_arrow(pq.read_table(docs_path, columns=["run_id", "doc_id", "path"]))
-    except Exception as exc:
+    except _PARQUET_READ_EXCEPTIONS as exc:
         logger.warning("Could not read docs.parquet: %s", exc)
         return {}
 

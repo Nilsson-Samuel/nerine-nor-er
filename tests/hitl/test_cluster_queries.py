@@ -253,6 +253,16 @@ def test_bucket_counts_quick_low_hitl(
     assert counts == {"auto_merge": 2, "defer": 1, "keep_separate": 2}
 
 
+def test_filter_by_bucket_invalid_profile_raises_value_error(
+    populated_data_dir: tuple[Path, str],
+) -> None:
+    data_dir, run_id = populated_data_dir
+    frame = load_cluster_frame(data_dir, run_id)
+
+    with pytest.raises(ValueError, match="Unsupported routing profile"):
+        filter_by_bucket(frame, "unknown_profile", "review")
+
+
 def test_bucket_counts_sum_matches_total(
     populated_data_dir: tuple[Path, str],
 ) -> None:
