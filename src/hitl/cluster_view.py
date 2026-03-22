@@ -21,6 +21,12 @@ from src.hitl.queries import (
     load_cluster_members,
     load_doc_paths,
 )
+from src.hitl.ui_utils import (
+    build_option_label,
+    escape_dot_label,
+    format_metric_value,
+    parse_option_id,
+)
 
 
 def render_cluster_header(cluster_row: dict[str, Any]) -> None:
@@ -33,9 +39,9 @@ def render_cluster_header(cluster_row: dict[str, Any]) -> None:
     col1, col2, col3, col4, col5 = st.columns(5)
     col1.metric("Route action", cluster_row.get("route_action", "-"))
     col2.metric("Size", cluster_row.get("cluster_size", "?"))
-    col3.metric("Confidence", f"{cluster_row.get('base_confidence', 0):.2f}")
-    col4.metric("Min edge score", f"{cluster_row.get('min_edge_score', 0):.2f}")
-    col5.metric("Density", f"{cluster_row.get('density', 0):.2f}")
+    col3.metric("Confidence", format_metric_value(cluster_row.get("base_confidence")))
+    col4.metric("Min edge score", format_metric_value(cluster_row.get("min_edge_score")))
+    col5.metric("Density", format_metric_value(cluster_row.get("density")))
 
     st.caption(
         "**Confidence** = geometric mean of internal edge scores. "
@@ -82,7 +88,7 @@ def render_member_drilldown(members: pl.DataFrame) -> None:
 
     # Show entity text next to entity_id for readability
     options = [
-        f"{row['entity_id']}  -  {row['text']}"
+        build_option_label(row["entity_id"], row["text"])
         for row in members.select("entity_id", "text").iter_rows(named=True)
     ]
     selected_label = st.selectbox(
@@ -97,7 +103,7 @@ def render_member_drilldown(members: pl.DataFrame) -> None:
         st.caption("Select a member above to see context and provenance.")
         return
 
-    selected_id = selected_label.split("  -  ")[0]
+    selected_id = parse_option_id(selected_label)
     row = members.filter(pl.col("entity_id") == selected_id)
     if row.is_empty():
         return
@@ -170,7 +176,7 @@ def render_cluster_graph(members: pl.DataFrame, edges: pl.DataFrame) -> None:
 
     for row in members.select("entity_id", "text").iter_rows(named=True):
         eid = row["entity_id"]
-        label = row["text"].replace('"', '\\"')
+        label = escape_dot_label(row["text"])
         lines.append(f'  "{eid}" [label="{label}"];')
 
     if edges.is_empty():

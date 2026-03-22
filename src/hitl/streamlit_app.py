@@ -27,6 +27,7 @@ from src.hitl.queries import (
     size_distribution,
 )
 from src.hitl.status import diagnostics_sidebar_summary, load_diagnostics_safe
+from src.hitl.ui_utils import build_option_label, parse_option_id
 
 
 DEFAULT_DATA_DIR = Path(__file__).resolve().parents[2] / "data" / "processed"
@@ -213,7 +214,7 @@ st.dataframe(sorted_frame.to_pandas(), use_container_width=True, hide_index=True
 # Cluster selector for inspection (selectbox below the table)
 # Show canonical_name next to cluster_id for human readability
 cluster_options = [
-    f"{row['cluster_id']}  -  {row['canonical_name']}"
+    build_option_label(row["cluster_id"], row["canonical_name"])
     for row in sorted_frame.select("cluster_id", "canonical_name").iter_rows(named=True)
 ]
 chosen_label = st.selectbox(
@@ -224,7 +225,7 @@ chosen_label = st.selectbox(
     key="cluster_picker",
 )
 # Extract cluster_id from the combined label
-chosen = chosen_label.split("  -  ")[0] if chosen_label else None
+chosen = parse_option_id(chosen_label)
 
 if chosen is not None:
     st.session_state["inspected_cluster_id"] = chosen
