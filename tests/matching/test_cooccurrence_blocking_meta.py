@@ -75,7 +75,7 @@ def test_build_cooccurrence_meta_features_handles_null_and_empty_doc_ids() -> No
 
 def test_full_feature_contract_contains_14_feature_columns(handoff_dir: Path) -> None:
     pairs = load_pairs_with_metadata(handoff_dir, DEFAULT_RUN_ID)
-    artifacts = load_embedding_artifacts(handoff_dir)
+    artifacts = load_embedding_artifacts(handoff_dir, DEFAULT_RUN_ID)
 
     string_df = build_string_features(pairs)
     embedding_df = build_embedding_features(pairs, artifacts)

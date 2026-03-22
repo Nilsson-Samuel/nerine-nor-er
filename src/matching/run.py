@@ -132,7 +132,7 @@ def run_features(data_dir: Path | str, run_id: str) -> pl.DataFrame:
     data_dir = Path(data_dir)
     output_dir = get_matching_run_output_dir(data_dir, run_id)
     pairs_df = load_pairs_with_metadata(data_dir, run_id)
-    artifacts = load_embedding_artifacts(data_dir)
+    artifacts = load_embedding_artifacts(data_dir, run_id)
 
     string_df = build_string_features(pairs_df)
     embedding_df = build_embedding_features(pairs_df, artifacts)

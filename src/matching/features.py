@@ -200,26 +200,38 @@ def build_embedding_id_index(entity_ids: np.ndarray) -> dict[str, int]:
     return index
 
 
-def load_embedding_artifacts(data_dir: Path | str) -> EmbeddingArtifacts:
-    """Load embedding artifacts from data_dir and enforce alignment invariants.
+def load_embedding_artifacts(data_dir: Path | str, run_id: str) -> EmbeddingArtifacts:
+    """Load embedding artifacts for one run and enforce alignment invariants.
 
     Required files:
     - embeddings.npy
     - context_embeddings.npy
     - embedding_entity_ids.npy
-    - entities.parquet (source of expected entity row order)
+    - entities.parquet (source of the expected per-run entity_id order)
     """
     data_dir = Path(data_dir)
     embeddings = np.load(data_dir / "embeddings.npy", allow_pickle=False)
     context_embeddings = np.load(data_dir / "context_embeddings.npy", allow_pickle=False)
     embedding_entity_ids = np.load(data_dir / "embedding_entity_ids.npy", allow_pickle=False)
-    entities = pq.read_table(data_dir / "entities.parquet", columns=["entity_id"])
+    entities = (
+        pl.from_arrow(
+            pq.read_table(
+                data_dir / "entities.parquet",
+                columns=["entity_id", "run_id"],
+                filters=[("run_id", "=", run_id)],
+            )
+        )
+        .sort("entity_id")
+    )
+    entity_ids = entities["entity_id"].to_list()
+    if not entity_ids:
+        raise ValueError(f"run_id not found in entities.parquet: {run_id}")
 
     validate_loaded_embeddings(
         embeddings=embeddings,
         context_embeddings=context_embeddings,
         embedding_entity_ids=embedding_entity_ids,
-        entity_ids=entities.column("entity_id").to_pylist(),
+        entity_ids=entity_ids,
     )
     return EmbeddingArtifacts(
         embeddings=embeddings,
