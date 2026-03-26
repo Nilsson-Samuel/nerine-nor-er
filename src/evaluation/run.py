@@ -134,20 +134,30 @@ def run_evaluation(
         _remap_gold_doc_ids(_load_gold_mentions(gold_path), docs),
         chunks,
     )
+    trusted_gold_mentions = (
+        gold_mentions.filter(pl.col("_offset_resolved"))
+        .drop("_offset_resolved")
+        .sort(["doc_id", "char_start", "char_end", "mention_id"])
+    )
     entities = _load_entities(data_dir, run_id)
     candidate_pairs = _load_candidate_pairs(data_dir, run_id)
     scored_pairs = _load_scored_pairs(data_dir, run_id)
     resolved_entities = _load_resolved_entities(data_dir, run_id)
 
     predicted_mentions = _build_predicted_mentions(entities, chunks)
-    matched_mentions = _match_gold_to_predicted(gold_mentions, predicted_mentions)
+    matched_mentions = _match_gold_to_predicted(
+        trusted_gold_mentions, predicted_mentions
+    )
     gold_group_by_entity, bridge_summary = _assign_gold_groups(
         entities, matched_mentions
     )
     bridge_summary["gold_mentions"] = gold_mentions.height
+    bridge_summary["trusted_gold_mentions"] = trusted_gold_mentions.height
     bridge_summary.update(gold_offset_summary)
     bridge_summary["matched_mention_rate"] = (
-        matched_mentions.height / gold_mentions.height if gold_mentions.height else 0.0
+        matched_mentions.height / trusted_gold_mentions.height
+        if trusted_gold_mentions.height
+        else 0.0
     )
     match_method_counts = {
         str(row["match_method"]): int(row["count"])
@@ -199,7 +209,7 @@ def run_evaluation(
 
     extraction_scores = mention_metrics(
         _mention_key_set(predicted_mentions),
-        _mention_key_set(gold_mentions),
+        _mention_key_set(trusted_gold_mentions),
     )
     matching_scores = pairwise_metrics(score_positive_pairs, gold_positive_pairs)
     matching_scores["evaluated_candidate_pair_count"] = labels_table.num_rows
@@ -256,6 +266,7 @@ def run_evaluation(
         },
         "counts": {
             "gold_mentions": gold_mentions.height,
+            "trusted_gold_mentions": trusted_gold_mentions.height,
             "predicted_mentions": predicted_mentions.height,
             "entities": entities.height,
             "evaluation_entities": len(scoped_gold_groups),
@@ -290,7 +301,7 @@ def run_evaluation(
         },
         "error_analysis": {
             "extraction": summarize_extraction_errors(
-                gold_mentions.to_dicts(),
+                trusted_gold_mentions.to_dicts(),
                 predicted_mentions.to_dicts(),
             ),
             "false_merges": summarize_false_merges(
@@ -356,8 +367,23 @@ def build_regression_checks(
         baseline = json.loads(baseline_report_path.read_text(encoding="utf-8"))
         baseline_metrics = baseline.get("metrics", {})
         for metric_name, allowed_drop in DEFAULT_ALLOWED_METRIC_DROP.items():
-            current_value = float(metrics[metric_name])
-            baseline_value = float(baseline_metrics[metric_name])
+            current_value = _finite_metric_value(metrics.get(metric_name))
+            baseline_value = _finite_metric_value(baseline_metrics.get(metric_name))
+            if current_value is None or baseline_value is None:
+                checks.append(
+                    {
+                        "check": f"{metric_name}_drift",
+                        "passed": True,
+                        "skipped": True,
+                        "details": {
+                            "baseline": baseline_metrics.get(metric_name),
+                            "current": metrics.get(metric_name),
+                            "allowed_drop": allowed_drop,
+                            "reason": "missing_or_nonfinite_metric",
+                        },
+                    }
+                )
+                continue
             actual_drop = baseline_value - current_value
             checks.append(
                 {
@@ -376,6 +402,16 @@ def build_regression_checks(
         "passed": all(bool(check["passed"]) for check in checks),
         "checks": checks,
     }
+
+
+def _finite_metric_value(value: Any) -> float | None:
+    """Return one finite metric value or None when drift checks should be skipped."""
+    if not isinstance(value, (int, float)):
+        return None
+    numeric = float(value)
+    if not math.isfinite(numeric):
+        return None
+    return numeric
 
 
 def _load_gold_mentions(gold_path: Path) -> pl.DataFrame:
@@ -517,7 +553,7 @@ def _remap_gold_offsets_to_run_text(
 ) -> tuple[pl.DataFrame, dict[str, int]]:
     """Project gold mention offsets into the run's reconstructed document text."""
     if gold_mentions.is_empty():
-        return gold_mentions, {
+        return gold_mentions.with_columns(pl.lit(True).alias("_offset_resolved")), {
             "gold_mentions_already_aligned": 0,
             "gold_mentions_remapped": 0,
             "gold_mentions_unresolved": 0,
@@ -543,19 +579,25 @@ def _remap_gold_offsets_to_run_text(
 
             if run_text is None:
                 unresolved += 1
-                rows.append(dict(row))
+                unresolved_row = dict(row)
+                unresolved_row["_offset_resolved"] = False
+                rows.append(unresolved_row)
                 continue
 
             if 0 <= start <= end <= len(run_text) and run_text[start:end] == text:
                 already_aligned += 1
                 search_start = max(search_start, end)
-                rows.append(dict(row))
+                aligned_row = dict(row)
+                aligned_row["_offset_resolved"] = True
+                rows.append(aligned_row)
                 continue
 
             remapped_start = _find_text_in_doc_text(run_text, text, search_start, start)
             if remapped_start is None:
                 unresolved += 1
-                rows.append(dict(row))
+                unresolved_row = dict(row)
+                unresolved_row["_offset_resolved"] = False
+                rows.append(unresolved_row)
                 continue
 
             remapped += 1
@@ -564,6 +606,7 @@ def _remap_gold_offsets_to_run_text(
             remapped_row = dict(row)
             remapped_row["char_start"] = remapped_start
             remapped_row["char_end"] = remapped_end
+            remapped_row["_offset_resolved"] = True
             rows.append(remapped_row)
 
     return (

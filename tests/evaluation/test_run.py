@@ -789,6 +789,7 @@ def test_remap_gold_offsets_to_run_text_realigns_shifted_mentions() -> None:
 
     assert remapped["char_start"].to_list() == [0, 7]
     assert remapped["char_end"].to_list() == [5, 11]
+    assert remapped["_offset_resolved"].to_list() == [True, True]
     assert summary == {
         "gold_mentions_already_aligned": 1,
         "gold_mentions_remapped": 1,
@@ -878,6 +879,58 @@ def test_run_evaluation_realigns_gold_offsets_before_scoring(tmp_path: Path) -> 
     assert report["alignment"]["gold_mentions_unresolved"] == 0
     assert report["stage_metrics"]["extraction"]["f1"] == pytest.approx(1.0)
     assert report["alignment"]["matched_mentions_by_method"]["exact_span"] == 4
+
+
+def test_run_evaluation_excludes_unresolved_gold_mentions_from_scoring(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_id = "eval_run_unresolved_001"
+    data_dir = _write_case_artifacts(tmp_path, run_id)
+    gold_path = tmp_path / "gold_annotations.csv"
+    _write_gold_csv(gold_path)
+
+    original = _remap_gold_offsets_to_run_text
+
+    def mark_one_row_unresolved(
+        gold_mentions: pl.DataFrame,
+        chunks: pl.DataFrame,
+    ) -> tuple[pl.DataFrame, dict[str, int]]:
+        remapped, summary = original(gold_mentions, chunks)
+        first = remapped.row(0, named=True)
+        forced_row = {
+            **first,
+            "char_start": int(first["char_start"]) + 20,
+            "char_end": int(first["char_end"]) + 20,
+            "_offset_resolved": False,
+        }
+        forced = pl.DataFrame([forced_row])
+        patched = pl.concat([forced, remapped.slice(1)], how="vertical")
+        return patched, {
+            **summary,
+            "gold_mentions_already_aligned": summary["gold_mentions_already_aligned"] - 1,
+            "gold_mentions_unresolved": summary["gold_mentions_unresolved"] + 1,
+        }
+
+    monkeypatch.setattr(
+        "src.evaluation.run._remap_gold_offsets_to_run_text",
+        mark_one_row_unresolved,
+    )
+
+    report = run_evaluation(
+        data_dir=data_dir,
+        run_id=run_id,
+        gold_path=gold_path,
+    )
+
+    assert report["counts"]["gold_mentions"] == 4
+    assert report["counts"]["trusted_gold_mentions"] == 3
+    assert report["alignment"]["gold_mentions_unresolved"] == 1
+    assert report["alignment"]["trusted_gold_mentions"] == 3
+    assert report["alignment"]["matched_mention_rate"] == pytest.approx(1.0)
+    assert report["stage_metrics"]["extraction"]["precision"] == pytest.approx(0.75)
+    assert report["stage_metrics"]["extraction"]["recall"] == pytest.approx(1.0)
+    assert report["alignment"]["matched_mentions_by_method"]["exact_span"] == 3
 
 
 def test_run_evaluation_scores_only_confidently_bridged_subset(
@@ -1043,6 +1096,39 @@ def test_build_regression_checks_flags_metric_drift(tmp_path: Path) -> None:
     assert checks["passed"] is False
     assert any(
         check["check"] == "pairwise_f1_drift" and check["passed"] is False
+        for check in checks["checks"]
+    )
+
+
+def test_build_regression_checks_skips_missing_baseline_metrics(tmp_path: Path) -> None:
+    report_path = tmp_path / "baseline_report.json"
+    report_path.write_text(
+        json.dumps({"metrics": {"pairwise_f1": 0.8}}),
+        encoding="utf-8",
+    )
+    existing = tmp_path / "existing.json"
+    existing.write_text("{}", encoding="utf-8")
+
+    checks = build_regression_checks(
+        metrics={
+            "pairwise_f1": 0.8,
+            "bcubed_f1": 0.8,
+            "ari": 0.8,
+            "nmi": 0.8,
+        },
+        input_paths={"report_path": existing},
+        baseline_report_path=report_path,
+        metric_scope={
+            "evaluation_entity_count": 1,
+            "evaluation_candidate_pair_count": 1,
+        },
+    )
+
+    assert checks["passed"] is True
+    assert any(
+        check["check"] == "bcubed_f1_drift"
+        and check["passed"] is True
+        and check.get("skipped") is True
         for check in checks["checks"]
     )
 

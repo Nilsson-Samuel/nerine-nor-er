@@ -266,6 +266,7 @@ def _execute_stage(
     except Exception as exc:
         record["success"] = False
         record["status"] = "failed"
+        record["outcome"] = "failed"
         record["error"] = f"{type(exc).__name__}: {exc}"
         logger.exception("Finished stage=%s success=false", stage_name)
         raise

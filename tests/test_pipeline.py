@@ -292,6 +292,7 @@ def test_run_pipeline_writes_failed_summary_and_stops_on_first_error(
     assert [stage["stage"] for stage in persisted["stages"]] == ["ingestion", "extraction"]
     assert persisted["stages"][0]["success"] is True
     assert persisted["stages"][1]["success"] is False
+    assert persisted["stages"][1]["outcome"] == "failed"
     assert persisted["counts"]["docs"] == 1
     assert persisted["counts"]["chunks"] == 1
     assert persisted["counts"]["entities"] is None
@@ -321,6 +322,7 @@ def test_run_pipeline_fails_early_for_empty_case_root_and_surfaces_reason(
     )
     assert [stage["stage"] for stage in persisted["stages"]] == ["ingestion"]
     assert persisted["stages"][0]["success"] is False
+    assert persisted["stages"][0]["outcome"] == "failed"
     assert persisted["counts"]["docs"] is None
     assert persisted["counts"]["chunks"] is None
 
