@@ -17,18 +17,19 @@ import pyarrow.parquet as pq
 from src.shared import schemas
 from src.shared.validators import validate_embedding_alignment
 
-
 EMBEDDING_DIM = 768
 TARGET_POSITIVE_RATE = 0.15
 DEFAULT_MAX_PAIRS = 2500
 ALLOWED_SYNTHETIC_TYPES = set(schemas.VALID_ENTITY_TYPES)
 
-LABELS_SCHEMA = pa.schema([
-    ("run_id", pa.string()),
-    ("entity_id_a", pa.string()),
-    ("entity_id_b", pa.string()),
-    ("label", pa.int8()),
-])
+LABELS_SCHEMA = pa.schema(
+    [
+        ("run_id", pa.string()),
+        ("entity_id_a", pa.string()),
+        ("entity_id_b", pa.string()),
+        ("label", pa.int8()),
+    ]
+)
 PAIR_KEY_COLUMNS = ["run_id", "entity_id_a", "entity_id_b"]
 
 
@@ -90,7 +91,9 @@ def validate_identity_groups_payload(payload: dict) -> None:
             raise ValueError(f"duplicate group_id: {group_id}")
         seen_group_ids.add(group_id)
 
-        entity_type = _require_non_empty_string(group.get("entity_type"), "entity_type").upper()
+        entity_type = _require_non_empty_string(
+            group.get("entity_type"), "entity_type"
+        ).upper()
         if entity_type not in ALLOWED_SYNTHETIC_TYPES:
             raise ValueError(
                 f"entity_type must be one of {sorted(ALLOWED_SYNTHETIC_TYPES)}, got {entity_type}"
@@ -102,7 +105,9 @@ def validate_identity_groups_payload(payload: dict) -> None:
             raise ValueError(f"group {group_id} must contain at least two variants")
         for variant in variants:
             _require_non_empty_string(variant.get("text"), f"{group_id}.variants.text")
-            _require_non_empty_string(variant.get("context"), f"{group_id}.variants.context")
+            _require_non_empty_string(
+                variant.get("context"), f"{group_id}.variants.context"
+            )
 
         doc_ids = group.get("doc_ids")
         if not isinstance(doc_ids, list) or not doc_ids:
@@ -114,8 +119,12 @@ def validate_identity_groups_payload(payload: dict) -> None:
     for i, item in enumerate(hard_negatives):
         if not isinstance(item, dict):
             raise ValueError(f"hard_negatives[{i}] must be an object")
-        group_id_a = _require_non_empty_string(item.get("group_id_a"), "hard_negatives.group_id_a")
-        group_id_b = _require_non_empty_string(item.get("group_id_b"), "hard_negatives.group_id_b")
+        group_id_a = _require_non_empty_string(
+            item.get("group_id_a"), "hard_negatives.group_id_a"
+        )
+        group_id_b = _require_non_empty_string(
+            item.get("group_id_b"), "hard_negatives.group_id_b"
+        )
         if group_id_a not in seen_group_ids or group_id_b not in seen_group_ids:
             raise ValueError("hard_negative references unknown group_id")
         if group_id_a == group_id_b:
@@ -141,7 +150,9 @@ def _build_entities(
             normalized = variant.get("normalized")
             if not isinstance(normalized, str) or not normalized.strip():
                 normalized = text.lower().strip()
-            context = _require_non_empty_string(variant.get("context"), f"{group_id}.context")
+            context = _require_non_empty_string(
+                variant.get("context"), f"{group_id}.context"
+            )
             doc_seed = _require_non_empty_string(
                 doc_ids[variant_idx % len(doc_ids)],
                 f"{group_id}.doc_id",
@@ -194,9 +205,13 @@ def _build_entities(
             "doc_id": pa.array([row["doc_id"] for row in rows], type=pa.string()),
             "chunk_id": pa.array([row["chunk_id"] for row in rows], type=pa.string()),
             "text": pa.array([row["text"] for row in rows], type=pa.string()),
-            "normalized": pa.array([row["normalized"] for row in rows], type=pa.string()),
+            "normalized": pa.array(
+                [row["normalized"] for row in rows], type=pa.string()
+            ),
             "type": pa.array([row["type"] for row in rows], type=pa.string()),
-            "char_start": pa.array([row["char_start"] for row in rows], type=pa.int32()),
+            "char_start": pa.array(
+                [row["char_start"] for row in rows], type=pa.int32()
+            ),
             "char_end": pa.array([row["char_end"] for row in rows], type=pa.int32()),
             "context": pa.array([row["context"] for row in rows], type=pa.string()),
             "count": pa.array([row["count"] for row in rows], type=pa.int32()),
@@ -301,7 +316,9 @@ def _build_pairs_and_labels(
         required = list(dict.fromkeys(required))[:negative_slots]
         required_set = set(required)
         remaining_pool = [pair for pair in negatives if pair not in required_set]
-        sampled = _sample_without_replacement(remaining_pool, negative_slots - len(required), rng)
+        sampled = _sample_without_replacement(
+            remaining_pool, negative_slots - len(required), rng
+        )
         selected_negatives = required + sampled
 
     selected_pairs = sorted(selected_positives + selected_negatives)
@@ -327,8 +344,12 @@ def _build_pairs_and_labels(
     candidates = pa.table(
         {
             "run_id": pa.array([run_id] * len(selected_pairs), type=pa.string()),
-            "entity_id_a": pa.array([pair[0] for pair in selected_pairs], type=pa.string()),
-            "entity_id_b": pa.array([pair[1] for pair in selected_pairs], type=pa.string()),
+            "entity_id_a": pa.array(
+                [pair[0] for pair in selected_pairs], type=pa.string()
+            ),
+            "entity_id_b": pa.array(
+                [pair[1] for pair in selected_pairs], type=pa.string()
+            ),
             "blocking_methods": pa.array(blocking_methods, type=pa.list_(pa.string())),
             "blocking_source": pa.array(blocking_source, type=pa.string()),
             "blocking_method_count": pa.array(blocking_method_count, type=pa.int8()),
@@ -339,9 +360,15 @@ def _build_pairs_and_labels(
     labels = pa.table(
         {
             "run_id": pa.array([run_id] * len(selected_pairs), type=pa.string()),
-            "entity_id_a": pa.array([pair[0] for pair in selected_pairs], type=pa.string()),
-            "entity_id_b": pa.array([pair[1] for pair in selected_pairs], type=pa.string()),
-            "label": pa.array([label_by_pair[pair] for pair in selected_pairs], type=pa.int8()),
+            "entity_id_a": pa.array(
+                [pair[0] for pair in selected_pairs], type=pa.string()
+            ),
+            "entity_id_b": pa.array(
+                [pair[1] for pair in selected_pairs], type=pa.string()
+            ),
+            "label": pa.array(
+                [label_by_pair[pair] for pair in selected_pairs], type=pa.int8()
+            ),
         },
         schema=LABELS_SCHEMA,
     )
@@ -359,18 +386,24 @@ def _build_embedding_artifacts(
     entity_ids = np.array([record.entity_id for record in records])
 
     base_name_vectors = {
-        group_id: rng.normal(size=(embedding_dim,)).astype(np.float32) for group_id in group_ids
+        group_id: rng.normal(size=(embedding_dim,)).astype(np.float32)
+        for group_id in group_ids
     }
     base_context_vectors = {
-        group_id: rng.normal(size=(embedding_dim,)).astype(np.float32) for group_id in group_ids
+        group_id: rng.normal(size=(embedding_dim,)).astype(np.float32)
+        for group_id in group_ids
     }
 
     entity_rows = []
     context_rows = []
     for record in records:
-        entity_rows.append(base_name_vectors[record.group_id] + rng.normal(scale=0.03, size=embedding_dim))
+        entity_rows.append(
+            base_name_vectors[record.group_id]
+            + rng.normal(scale=0.03, size=embedding_dim)
+        )
         context_rows.append(
-            base_context_vectors[record.group_id] + rng.normal(scale=0.035, size=embedding_dim)
+            base_context_vectors[record.group_id]
+            + rng.normal(scale=0.035, size=embedding_dim)
         )
     embeddings = _l2_normalize_rows(np.asarray(entity_rows, dtype=np.float32))
     context_embeddings = _l2_normalize_rows(np.asarray(context_rows, dtype=np.float32))
@@ -410,14 +443,18 @@ def build_matching_dataset(
         max_pairs=max_pairs,
         seed=seed,
     )
-    embeddings, context_embeddings, embedding_entity_ids = _build_embedding_artifacts(records, seed)
+    embeddings, context_embeddings, embedding_entity_ids = _build_embedding_artifacts(
+        records, seed
+    )
 
     entity_errors = schemas.validate_contract_rules(entities, "entities")
     if entity_errors:
         raise ValueError(f"entities.parquet contract violations: {entity_errors}")
     candidate_errors = schemas.validate_contract_rules(candidates, "candidate_pairs")
     if candidate_errors:
-        raise ValueError(f"candidate_pairs.parquet contract violations: {candidate_errors}")
+        raise ValueError(
+            f"candidate_pairs.parquet contract violations: {candidate_errors}"
+        )
     validate_embedding_alignment(
         embeddings=embeddings,
         context_embeddings=context_embeddings,
@@ -453,17 +490,16 @@ def _load_existing_features(data_dir: Path, run_id: str) -> pl.DataFrame | None:
 def _raise_if_duplicate_pair_keys(frame: pl.DataFrame, file_name: str) -> None:
     """Fail fast when a pair-key table contains duplicates."""
     duplicate_count = (
-        frame.group_by(PAIR_KEY_COLUMNS)
-        .len()
-        .filter(pl.col("len") > 1)
-        .height
+        frame.group_by(PAIR_KEY_COLUMNS).len().filter(pl.col("len") > 1).height
     )
     if duplicate_count:
         raise ValueError(f"{file_name} contains duplicate pair keys")
 
 
-def _raise_if_pair_keys_mismatch(features: pl.DataFrame, labels: pl.DataFrame) -> None:
-    """Require an exact one-to-one pair-key match before joining labels."""
+def _raise_if_unjoinable_label_keys(
+    features: pl.DataFrame, labels: pl.DataFrame
+) -> None:
+    """Require every labeled pair key to exist in the per-run feature output."""
     _raise_if_duplicate_pair_keys(features.select(PAIR_KEY_COLUMNS), "features.parquet")
     _raise_if_duplicate_pair_keys(labels.select(PAIR_KEY_COLUMNS), "labels.parquet")
 
@@ -474,14 +510,6 @@ def _raise_if_pair_keys_mismatch(features: pl.DataFrame, labels: pl.DataFrame) -
     )
     if missing_feature_keys.height:
         raise ValueError("features.parquet is missing keys from labels.parquet")
-
-    extra_feature_keys = features.select(PAIR_KEY_COLUMNS).join(
-        labels.select(PAIR_KEY_COLUMNS),
-        on=PAIR_KEY_COLUMNS,
-        how="anti",
-    )
-    if extra_feature_keys.height:
-        raise ValueError("features.parquet contains keys missing from labels.parquet")
 
 
 def load_labeled_feature_matrix(
@@ -507,8 +535,10 @@ def load_labeled_feature_matrix(
 
     features = _load_existing_features(data_dir, run_id)
 
-    labels = pl.read_parquet(data_dir / "labels.parquet").filter(pl.col("run_id") == run_id)
-    _raise_if_pair_keys_mismatch(features, labels)
+    labels = pl.read_parquet(data_dir / "labels.parquet").filter(
+        pl.col("run_id") == run_id
+    )
+    _raise_if_unjoinable_label_keys(features, labels)
     labeled = features.join(
         labels,
         on=PAIR_KEY_COLUMNS,

@@ -75,7 +75,7 @@ def test_build_embedding_features_fixture_output_is_bounded_and_non_null(
     handoff_dir: Path,
 ) -> None:
     pairs = load_pairs_with_names(handoff_dir, DEFAULT_RUN_ID)
-    artifacts = load_embedding_artifacts(handoff_dir)
+    artifacts = load_embedding_artifacts(handoff_dir, DEFAULT_RUN_ID)
     result = build_embedding_features(pairs, artifacts)
 
     assert len(result) == len(pairs)

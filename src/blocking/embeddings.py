@@ -97,13 +97,35 @@ def encode_and_persist(
     if ctx_emb.shape != (n, EMBEDDING_DIM):
         raise ValueError(f"ctx_emb shape {ctx_emb.shape} != ({n}, {EMBEDDING_DIM})")
 
-    out_dir.mkdir(parents=True, exist_ok=True)
-    np.save(out_dir / "embeddings.npy", emb)
-    np.save(out_dir / "context_embeddings.npy", ctx_emb)
-    np.save(out_dir / "embedding_entity_ids.npy", np.array(entity_ids, dtype=object))
+    persist_embedding_artifacts(
+        entity_ids=entity_ids,
+        embeddings=emb,
+        context_embeddings=ctx_emb,
+        out_dir=out_dir,
+    )
 
     logger.info(
         "Embeddings persisted: shape=%s, name_encode=%.1fs, ctx_encode=%.1fs",
         emb.shape, t_name, t_ctx,
     )
     return emb, ctx_emb
+
+
+def persist_embedding_artifacts(
+    entity_ids: list[str] | np.ndarray,
+    embeddings: np.ndarray,
+    context_embeddings: np.ndarray,
+    out_dir: Path,
+) -> None:
+    """Persist blocking embedding artifacts in the matching-safe on-disk format.
+
+    Args:
+        entity_ids: Entity IDs aligned to embedding rows.
+        embeddings: L2-normalized entity-name embeddings.
+        context_embeddings: L2-normalized context embeddings.
+        out_dir: Directory to write `.npy` artifacts into.
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+    np.save(out_dir / "embeddings.npy", embeddings)
+    np.save(out_dir / "context_embeddings.npy", context_embeddings)
+    np.save(out_dir / "embedding_entity_ids.npy", np.asarray(entity_ids, dtype=np.str_))

@@ -315,10 +315,11 @@ class TestRunDiscoveryAndRegistration:
         assert all(c in "0123456789abcdef" for c in rid)
 
     def test_no_files_no_parquet(self, tmp_path: Path, data_dir: Path):
-        """Empty case root produces no parquet file."""
+        """Empty case root fails early with a clear user-facing error."""
         empty = tmp_path / "empty"
         empty.mkdir()
-        run_discovery_and_registration(empty, data_dir, run_id="emptyrun")
+        with pytest.raises(ValueError, match="No PDF/DOCX files found under case_root"):
+            run_discovery_and_registration(empty, data_dir, run_id="emptyrun")
         assert not (data_dir / "docs.parquet").exists()
 
     def test_all_paths_relative(self, case_root: Path, data_dir: Path):

@@ -95,6 +95,7 @@ def build_mock_entities(run_id: str = DEFAULT_RUN_ID) -> pa.Table:
          50, 65, "Konto i Den Norske Bank ble sperret.",     1, [_pos(_CK_B1, 50, 65)]),
     ]
 
+    rows.sort(key=lambda row: row[0])
     n = len(rows)
     return pa.table(
         {
