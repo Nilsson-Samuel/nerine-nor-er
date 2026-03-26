@@ -17,6 +17,7 @@ from src.evaluation.run import (
     _build_labels_table,
     _chunk_start_offsets_from_full_text,
     _match_gold_to_predicted,
+    _remap_gold_offsets_to_run_text,
     _remap_gold_doc_ids,
     build_regression_checks,
     get_evaluation_labels_path,
@@ -573,6 +574,68 @@ def _write_gold_csv(path: Path) -> None:
         writer.writerows(rows)
 
 
+def _write_shifted_gold_csv(path: Path) -> None:
+    """Write gold mentions with legacy offsets from a different text view."""
+    rows = [
+        {
+            "case_id": "case_a",
+            "doc_id": _hex32(1),
+            "doc_name": "doc_1.docx",
+            "mention_id": "m1",
+            "char_start": 0,
+            "char_end": 13,
+            "text": "Alice Johnson",
+            "entity_type": "PER",
+            "group_id": "per_alice",
+            "canonical_text": "Alice Johnson",
+            "notes": "",
+        },
+        {
+            "case_id": "case_a",
+            "doc_id": _hex32(1),
+            "doc_name": "doc_1.docx",
+            "mention_id": "m2",
+            "char_start": 19,
+            "char_end": 28,
+            "text": "Bob Stone",
+            "entity_type": "PER",
+            "group_id": "per_bob",
+            "canonical_text": "Bob Stone",
+            "notes": "",
+        },
+        {
+            "case_id": "case_a",
+            "doc_id": _hex32(2),
+            "doc_name": "doc_2.docx",
+            "mention_id": "m3",
+            "char_start": 0,
+            "char_end": 8,
+            "text": "B. Stone",
+            "entity_type": "PER",
+            "group_id": "per_bob",
+            "canonical_text": "Bob Stone",
+            "notes": "",
+        },
+        {
+            "case_id": "case_a",
+            "doc_id": _hex32(2),
+            "doc_name": "doc_2.docx",
+            "mention_id": "m4",
+            "char_start": 17,
+            "char_end": 22,
+            "text": "Alice",
+            "entity_type": "PER",
+            "group_id": "per_alice",
+            "canonical_text": "Alice Johnson",
+            "notes": "",
+        },
+    ]
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
+        writer.writeheader()
+        writer.writerows(rows)
+
+
 def _write_subset_metric_gold_csv(path: Path) -> None:
     """Write gold mentions for only the confidently bridged subset."""
     rows = [
@@ -699,6 +762,40 @@ def test_remap_gold_doc_ids_rejects_ambiguous_doc_names() -> None:
         _remap_gold_doc_ids(gold_mentions, docs)
 
 
+def test_remap_gold_offsets_to_run_text_realigns_shifted_mentions() -> None:
+    chunks = pl.DataFrame(
+        {
+            "doc_id": [_hex32(1)],
+            "chunk_id": [_hex32(11)],
+            "chunk_index": [0],
+            "text": ["Alpha  Beta"],
+            "global_start": [0],
+        }
+    )
+    gold_mentions = pl.DataFrame(
+        {
+            "doc_id": [_hex32(1), _hex32(1)],
+            "doc_name": ["doc_1.docx", "doc_1.docx"],
+            "mention_id": ["m1", "m2"],
+            "char_start": [0, 6],
+            "char_end": [5, 10],
+            "text": ["Alpha", "Beta"],
+            "entity_type": ["PER", "PER"],
+            "group_id": ["g1", "g2"],
+        }
+    )
+
+    remapped, summary = _remap_gold_offsets_to_run_text(gold_mentions, chunks)
+
+    assert remapped["char_start"].to_list() == [0, 7]
+    assert remapped["char_end"].to_list() == [5, 11]
+    assert summary == {
+        "gold_mentions_already_aligned": 1,
+        "gold_mentions_remapped": 1,
+        "gold_mentions_unresolved": 0,
+    }
+
+
 def test_run_evaluation_writes_report_and_labels(tmp_path: Path) -> None:
     run_id = "eval_run_001"
     data_dir = _write_case_artifacts(tmp_path, run_id)
@@ -762,6 +859,25 @@ def test_run_evaluation_filters_shared_training_labels_by_allowed_doc_ids(
     assert shared_labels[0]["entity_id_a"] == _hex32(21)
     assert shared_labels[0]["entity_id_b"] == _hex32(22)
     assert shared_labels[0]["label"] == 0
+
+
+def test_run_evaluation_realigns_gold_offsets_before_scoring(tmp_path: Path) -> None:
+    run_id = "eval_run_offset_realign_001"
+    data_dir = _write_case_artifacts(tmp_path, run_id)
+    gold_path = tmp_path / "gold_annotations_shifted.csv"
+    _write_shifted_gold_csv(gold_path)
+
+    report = run_evaluation(
+        data_dir=data_dir,
+        run_id=run_id,
+        gold_path=gold_path,
+    )
+
+    assert report["alignment"]["gold_mentions_remapped"] == 2
+    assert report["alignment"]["gold_mentions_already_aligned"] == 2
+    assert report["alignment"]["gold_mentions_unresolved"] == 0
+    assert report["stage_metrics"]["extraction"]["f1"] == pytest.approx(1.0)
+    assert report["alignment"]["matched_mentions_by_method"]["exact_span"] == 4
 
 
 def test_run_evaluation_scores_only_confidently_bridged_subset(

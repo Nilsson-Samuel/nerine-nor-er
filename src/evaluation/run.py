@@ -129,8 +129,11 @@ def run_evaluation(
     labels_path = get_evaluation_labels_path(data_dir, run_id)
 
     docs = _load_docs(data_dir, run_id)
-    gold_mentions = _remap_gold_doc_ids(_load_gold_mentions(gold_path), docs)
     chunks = _attach_chunk_global_offsets(_load_chunks(data_dir, run_id), docs)
+    gold_mentions, gold_offset_summary = _remap_gold_offsets_to_run_text(
+        _remap_gold_doc_ids(_load_gold_mentions(gold_path), docs),
+        chunks,
+    )
     entities = _load_entities(data_dir, run_id)
     candidate_pairs = _load_candidate_pairs(data_dir, run_id)
     scored_pairs = _load_scored_pairs(data_dir, run_id)
@@ -142,6 +145,7 @@ def run_evaluation(
         entities, matched_mentions
     )
     bridge_summary["gold_mentions"] = gold_mentions.height
+    bridge_summary.update(gold_offset_summary)
     bridge_summary["matched_mention_rate"] = (
         matched_mentions.height / gold_mentions.height if gold_mentions.height else 0.0
     )
@@ -507,6 +511,71 @@ def _attach_chunk_global_offsets(
     )
 
 
+def _remap_gold_offsets_to_run_text(
+    gold_mentions: pl.DataFrame,
+    chunks: pl.DataFrame,
+) -> tuple[pl.DataFrame, dict[str, int]]:
+    """Project gold mention offsets into the run's reconstructed document text."""
+    if gold_mentions.is_empty():
+        return gold_mentions, {
+            "gold_mentions_already_aligned": 0,
+            "gold_mentions_remapped": 0,
+            "gold_mentions_unresolved": 0,
+        }
+
+    doc_text_by_doc_id = _reconstruct_doc_text_by_doc_id(chunks)
+    rows: list[dict[str, Any]] = []
+    already_aligned = 0
+    remapped = 0
+    unresolved = 0
+
+    for doc_id, group in gold_mentions.group_by("doc_id", maintain_order=True):
+        doc_key = str(doc_id[0] if isinstance(doc_id, tuple) else doc_id)
+        run_text = doc_text_by_doc_id.get(doc_key)
+        search_start = 0
+
+        for row in group.sort(["char_start", "char_end", "mention_id"]).iter_rows(
+            named=True
+        ):
+            text = str(row["text"])
+            start = int(row["char_start"])
+            end = int(row["char_end"])
+
+            if run_text is None:
+                unresolved += 1
+                rows.append(dict(row))
+                continue
+
+            if 0 <= start <= end <= len(run_text) and run_text[start:end] == text:
+                already_aligned += 1
+                search_start = max(search_start, end)
+                rows.append(dict(row))
+                continue
+
+            remapped_start = _find_text_in_doc_text(run_text, text, search_start, start)
+            if remapped_start is None:
+                unresolved += 1
+                rows.append(dict(row))
+                continue
+
+            remapped += 1
+            remapped_end = remapped_start + len(text)
+            search_start = max(search_start, remapped_end)
+            remapped_row = dict(row)
+            remapped_row["char_start"] = remapped_start
+            remapped_row["char_end"] = remapped_end
+            rows.append(remapped_row)
+
+    return (
+        pl.DataFrame(rows).sort(["doc_id", "char_start", "char_end", "mention_id"]),
+        {
+            "gold_mentions_already_aligned": already_aligned,
+            "gold_mentions_remapped": remapped,
+            "gold_mentions_unresolved": unresolved,
+        },
+    )
+
+
 def _load_entities(data_dir: Path, run_id: str) -> pl.DataFrame:
     """Load and validate entities for one run."""
     table = pq.read_table(data_dir / "entities.parquet")
@@ -706,6 +775,49 @@ def _chunk_offsets_from_overlaps(doc_chunks: pl.DataFrame) -> dict[str, int]:
         offsets[chunk_id] = len(assembled) - overlap
         assembled += text[overlap:]
     return offsets
+
+
+def _reconstruct_doc_text_by_doc_id(chunks: pl.DataFrame) -> dict[str, str]:
+    """Rebuild one document text per doc_id from chunk text and global starts."""
+    doc_text_by_doc_id: dict[str, str] = {}
+    for doc_id, group in chunks.group_by("doc_id", maintain_order=True):
+        doc_key = str(doc_id[0] if isinstance(doc_id, tuple) else doc_id)
+        max_end = 0
+        chunk_rows = list(group.sort("global_start").iter_rows(named=True))
+        for row in chunk_rows:
+            max_end = max(max_end, int(row["global_start"]) + len(str(row["text"])))
+
+        chars = [""] * max_end
+        for row in chunk_rows:
+            start = int(row["global_start"])
+            text = str(row["text"])
+            for index, char in enumerate(text):
+                absolute_index = start + index
+                if not chars[absolute_index]:
+                    chars[absolute_index] = char
+        doc_text_by_doc_id[doc_key] = "".join(char or " " for char in chars)
+    return doc_text_by_doc_id
+
+
+def _find_text_in_doc_text(
+    doc_text: str,
+    text: str,
+    search_start: int,
+    original_start: int,
+) -> int | None:
+    """Find one gold mention string in run text, preferring monotonic order."""
+    start = doc_text.find(text, max(0, search_start))
+    if start != -1:
+        return start
+
+    if 0 <= original_start < len(doc_text):
+        window_start = max(0, original_start - 256)
+        start = doc_text.find(text, window_start)
+        if start != -1:
+            return start
+
+    start = doc_text.find(text)
+    return start if start != -1 else None
 
 
 def _largest_suffix_prefix_overlap(left: str, right: str) -> int:
