@@ -124,6 +124,76 @@ def extract_regex_mentions(
     return _remove_overlaps(raw_hits)
 
 
+def merge_regex_with_ner(
+    regex_mentions: list[dict],
+    ner_mentions: list[dict],
+) -> tuple[list[dict], list[dict]]:
+    """Merge regex and NER mentions, letting regex supersets win over NER subspans.
+
+    Normal rule: NER spans take priority — regex only fills gaps the model missed.
+    Exception: when a regex span completely contains all overlapping NER spans of
+    the same type, the regex span wins and the covered NER subspans are dropped.
+    This handles cases like "Klokkersvingen 1, 1580 RYGGE" where NER returns two
+    separate LOC fragments but the regex produces the correct full-address span.
+
+    The guard is tight: regex only supersedes NER when:
+    - The regex span fully contains every overlapping NER span (no partial overlaps).
+    - All overlapping NER spans share the same type as the regex span.
+    A regex span that partially overlaps even one NER span of a different type is
+    dropped as before.
+
+    Args:
+        regex_mentions: Mentions from regex extraction.
+        ner_mentions: Mentions from NER extraction.
+
+    Returns:
+        Tuple of (filtered_regex_mentions, filtered_ner_mentions). The NER list
+        has any subspans fully consumed by a winning regex span removed.
+    """
+    if not ner_mentions:
+        return regex_mentions, ner_mentions
+
+    # Index NER mentions for efficient lookup
+    ner_spans = [(m["char_start"], m["char_end"]) for m in ner_mentions]
+
+    kept_regex: list[dict] = []
+    ner_indices_to_drop: set[int] = set()
+
+    for rm in regex_mentions:
+        r_start, r_end, r_type = rm["char_start"], rm["char_end"], rm["type"]
+
+        # Find all NER spans that overlap this regex span
+        overlapping = [
+            i for i, (ns, ne) in enumerate(ner_spans)
+            if r_start < ne and r_end > ns
+        ]
+
+        if not overlapping:
+            # No overlap — regex fills a gap, keep it
+            kept_regex.append(rm)
+            continue
+
+        # Check superset condition: regex fully contains every overlapping NER span
+        # and all overlapping NER spans share the same type as the regex span
+        all_contained = all(
+            ner_spans[i][0] >= r_start and ner_spans[i][1] <= r_end
+            for i in overlapping
+        )
+        all_same_type = all(
+            ner_mentions[i]["type"] == r_type
+            for i in overlapping
+        )
+
+        if all_contained and all_same_type:
+            # Regex superset wins — keep regex, drop the NER subspans
+            kept_regex.append(rm)
+            ner_indices_to_drop.update(overlapping)
+        # else: partial overlap or type mismatch — drop the regex span (NER wins)
+
+    filtered_ner = [m for i, m in enumerate(ner_mentions) if i not in ner_indices_to_drop]
+    return kept_regex, filtered_ner
+
+
 def filter_overlapping_with_ner(
     regex_mentions: list[dict],
     ner_mentions: list[dict],
@@ -131,6 +201,8 @@ def filter_overlapping_with_ner(
     """Remove regex mentions that overlap with any NER mention.
 
     NER model spans take priority — regex only fills gaps the model missed.
+    Use merge_regex_with_ner instead when regex supersets of NER fragments
+    should be preferred over the individual NER subspans.
 
     Args:
         regex_mentions: Mentions from regex extraction.

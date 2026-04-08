@@ -18,7 +18,7 @@ from src.extraction.entity_normalizer import normalize_entity
 from src.extraction.ner import build_ner, extract_ner_mentions
 from src.extraction.regex_supplements import (
     extract_regex_mentions,
-    filter_overlapping_with_ner,
+    merge_regex_with_ner,
 )
 from src.extraction.writer import write_entities_parquet
 from src.shared.schemas import validate_contract_rules
@@ -208,11 +208,12 @@ def _extract_chunk_mentions(chunk: dict, ner_pipe: object) -> list[dict]:
         text, doc_id, chunk_id, page_num, source_unit_kind, ner_pipe,
     )
 
-    # Regex extraction, filtered to not overlap with NER spans
+    # Regex extraction — regex supersets of same-type NER fragments win and
+    # replace the covered subspans; all other overlaps defer to NER as before.
     regex_mentions = extract_regex_mentions(
         text, doc_id, chunk_id, page_num, source_unit_kind,
     )
-    regex_mentions = filter_overlapping_with_ner(regex_mentions, ner_mentions)
+    regex_mentions, ner_mentions = merge_regex_with_ner(regex_mentions, ner_mentions)
 
     return ner_mentions + regex_mentions
 
