@@ -1,8 +1,9 @@
-"""Regex supplement extraction — structured patterns for phone, fnr, plates, and FIN.
+"""Regex supplement extraction — structured patterns for identifiers and addresses.
 
 Augments NER model output with deterministic pattern matches for structured
-identifiers that transformer models typically miss.  Each match becomes a
-typed mention with char-level provenance, same shape as NER mentions.
+identifiers that transformer models typically miss, plus Norwegian street
+addresses that the model often fragments or skips entirely.  Each match
+becomes a typed mention with char-level provenance, same shape as NER mentions.
 """
 
 import logging
@@ -14,9 +15,23 @@ logger = logging.getLogger(__name__)
 # Order within each type list matters: first match wins for a given span.
 PATTERNS: dict[str, list[re.Pattern[str]]] = {
     # Norwegian phone: 8 digits (compact or spaced 3-2-3)
+    # International phone: + country code (1–3 digits) + 7–12 digits, optional spaces/dashes.
+    #   Anchored on left by \b so we don't eat into longer numbers.
+    #   The Norwegian domestic patterns must come first so they win on overlap.
+    # Email: standard RFC-ish local@domain.tld — covers handles like arh_hast@gmail.com.
+    # Username/handle: word with at least one underscore or digit run, e.g. alfred_1212.
+    #   Requires ≥3 chars total and at least one letter to avoid matching bare numbers.
+    #   Must not look like a plain name (heuristic: contains _ or digit-then-letter).
     "COMM": [
         re.compile(r"\b\d{3}\s\d{2}\s\d{3}\b"),
         re.compile(r"\b\d{8}\b"),
+        # International phone: + followed by 7–15 digits (compact or spaced/dashed).
+        # The compact variant handles numbers like +66878767665 with no separators.
+        # The segmented variant handles +66 878 767 665 or +1-800-555-1234.
+        re.compile(r"(?<!\d)\+\d{7,15}\b"),
+        re.compile(r"(?<!\d)\+\d{1,3}[\s\-]\d{2,5}(?:[\s\-]\d{2,5}){1,4}\b"),
+        re.compile(r"\b[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}\b"),
+        re.compile(r"\b(?=[a-zA-Z0-9_]*[a-zA-Z])(?=[a-zA-Z0-9_]*_)[a-zA-Z0-9_]{3,}\b"),
     ],
     # Fødselsnummer: 6 digits (DOB) + optional separator + 5 digits
     "PER": [
@@ -32,6 +47,38 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
     "FIN": [
         re.compile(r"\b\d{4}\.\d{2}\.\d{4,5}\b"),
         re.compile(r"\bNO\d{2}\s?\d{4}\s?\d{4}\s?\d{3}\b"),
+    ],
+    # Norwegian street addresses — two sub-patterns, both optionally followed
+    # by a Norwegian postal code + city: ", NNNN <City>" (e.g. ", 1580 Rygge").
+    # This covers full address forms like "Klokkersvingen 1, 1580 Rygge" and
+    # "Fridtjof Nansens vei 14, 0369 Oslo" that investigators commonly write.
+    #
+    # 1) Compound names where the suffix is fused into the word:
+    #    "Storgata 12", "Parkveien 31", "Rådhusplassen"
+    # 2) Multi-word names with a standalone suffix word:
+    #    "Karl Johans gate 5", "Kongens gate 10"
+    "LOC": [
+        # Compound: capitalized word ending in a street suffix + optional number
+        #           + optional ", NNNN City" postal tail
+        re.compile(
+            r"\b[A-ZÆØÅ][a-zæøå]*"
+            r"(?:gata|gaten|gate|veien|vei|allé[en]?"
+            r"|plassen|plass|torget|torg|stien|sti"
+            r"|bakken|løkka|svingen|tunet|kroken)"
+            r"(?:\s\d{1,4}[A-Za-z]?)?"
+            r"(?:,\s\d{4}\s[A-ZÆØÅ][A-ZÆØÅa-zæøå]+)?\b",
+        ),
+        # Multi-word: one or more capitalized words + space + street suffix
+        #             + optional number + optional ", NNNN City" postal tail
+        re.compile(
+            r"\b[A-ZÆØÅ][a-zæøå]+"
+            r"(?:\s[A-ZÆØÅ][a-zæøå]+)*"
+            r"\s(?:gate|gata|gaten|vei|veien|allé"
+            r"|plass|plassen|torg|torget|stien|sti"
+            r"|bakken|løkka|svingen|tunet|kroken)"
+            r"(?:\s\d{1,4}[A-Za-z]?)?"
+            r"(?:,\s\d{4}\s[A-ZÆØÅ][A-ZÆØÅa-zæøå]+)?\b",
+        ),
     ],
 }
 
