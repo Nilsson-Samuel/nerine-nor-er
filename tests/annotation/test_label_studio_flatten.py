@@ -3,6 +3,8 @@ from __future__ import annotations
 import csv
 import json
 from pathlib import Path
+import subprocess
+import sys
 
 import pytest
 
@@ -217,3 +219,65 @@ def test_normalize_label_studio_export_prunes_empty_zero_length_labels(
     assert summary["dropped_empty_zero_length_results"] == 1
     assert len(normalized_payload[0]["annotations"][0]["result"]) == 1
     assert len(mentions) == 1
+
+
+def test_flatten_label_studio_export_cli_prunes_empty_zero_length_labels_by_default(
+    tmp_path: Path,
+) -> None:
+    export_path = tmp_path / "needs-normalization.ready.json"
+    output_path = tmp_path / "gold_annotations.csv"
+    payload = [
+        {
+            "data": {
+                "case_id": "case_demo_01",
+                "doc_id": "doc_a",
+                "doc_name": "01-note.docx",
+                "text": "Alice visited Oslo.",
+            },
+            "annotations": [
+                {
+                    "result": [
+                        {
+                            "type": "labels",
+                            "value": {
+                                "start": 0,
+                                "end": 5,
+                                "text": "Alice",
+                                "labels": ["PER"],
+                            },
+                        },
+                        {
+                            "type": "labels",
+                            "value": {
+                                "start": 10,
+                                "end": 10,
+                                "text": "",
+                                "labels": ["PER"],
+                            },
+                        },
+                    ]
+                }
+            ],
+        }
+    ]
+    export_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/flatten_label_studio_export.py",
+            str(export_path),
+            "--output",
+            str(output_path),
+        ],
+        check=True,
+        cwd=Path(__file__).resolve().parents[2],
+        capture_output=True,
+        text=True,
+    )
+
+    summary = json.loads(result.stdout)
+    rows = list(csv.DictReader(output_path.open(encoding="utf-8", newline="")))
+    assert summary["mention_count"] == 1
+    assert summary["dropped_empty_zero_length_results"] == 1
+    assert len(rows) == 1

@@ -39,8 +39,8 @@ def parse_args() -> argparse.Namespace:
         "--drop-empty-zero-length-labels",
         action="store_true",
         help=(
-            "Prune structurally invalid Label Studio results where start=end and text=\"\" "
-            "before validation/conversion."
+            "Deprecated compatibility flag. Empty zero-length Label Studio labels are "
+            "pruned before validation/conversion by default."
         ),
     )
     parser.add_argument(
@@ -57,6 +57,7 @@ def main() -> int:
     export_path = args.export_path
     output_path = args.output or export_path.with_name("gold_annotations.csv")
     normalized_summary: dict[str, object] | None = None
+    drop_empty_zero_length_labels = True
 
     if args.normalized_export_output is not None:
         normalized_summary = normalize_label_studio_export(
@@ -67,14 +68,14 @@ def main() -> int:
     if args.validate_only:
         mentions = build_mentions_from_label_studio_export(
             export_path,
-            drop_empty_zero_length_labels=args.drop_empty_zero_length_labels,
+            drop_empty_zero_length_labels=drop_empty_zero_length_labels,
         )
         summary = summarize_mentions(mentions)
     else:
         summary = convert_label_studio_export_to_csv(
             export_path,
             output_path,
-            drop_empty_zero_length_labels=args.drop_empty_zero_length_labels,
+            drop_empty_zero_length_labels=drop_empty_zero_length_labels,
         )
 
     if normalized_summary is not None:

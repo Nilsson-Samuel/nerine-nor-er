@@ -90,7 +90,32 @@ def parse_inline_list(raw: str) -> list[str]:
     inner = raw[1:-1].strip()
     if not inner:
         return []
-    return [part.strip().strip("'\"") for part in inner.split(",") if part.strip()]
+    values: list[str] = []
+    current: list[str] = []
+    quote_char: str | None = None
+
+    for char in inner:
+        if char in {"'", '"'}:
+            if quote_char is None:
+                quote_char = char
+                continue
+            if quote_char == char:
+                quote_char = None
+                continue
+
+        if char == "," and quote_char is None:
+            value = "".join(current).strip()
+            if value:
+                values.append(value)
+            current = []
+            continue
+
+        current.append(char)
+
+    value = "".join(current).strip()
+    if value:
+        values.append(value)
+    return values
 
 
 def parse_brief_yaml(path: Path) -> tuple[str, list[EntitySeed]]:
