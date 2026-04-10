@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -245,6 +246,45 @@ def test_run_resolution_writes_component_and_diagnostic_artifacts(tmp_path: Path
     assert diagnostics_payload["retained_edge_count"] == 2
     assert diagnostics_payload["singleton_node_count"] == 1
     assert diagnostics_payload["thresholds"]["keep_score_threshold"] == 0.6
+
+
+def test_run_resolution_logs_start_summary_and_finish(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    a, b, c, d, e = (_hex32(index) for index in range(1, 6))
+    pq.write_table(
+        _build_entities_table("run_resolution_logging", [a, b, c, d, e]),
+        tmp_path / "entities.parquet",
+    )
+    scored_pairs_path = get_scored_pairs_output_path(tmp_path, "run_resolution_logging")
+    scored_pairs_path.parent.mkdir(parents=True, exist_ok=True)
+    pq.write_table(
+        _build_scored_pairs_table(
+            [
+                ("run_resolution_logging", a, b, 0.80),
+                ("run_resolution_logging", b, c, 0.10),
+                ("run_resolution_logging", c, d, 0.92),
+            ]
+        ),
+        scored_pairs_path,
+    )
+
+    caplog.set_level(logging.INFO, logger="src.resolution.run")
+
+    run_resolution(tmp_path, "run_resolution_logging")
+
+    assert "Resolution start run_id=run_resolution_logging entity_count=5 scored_pair_count=3" in (
+        caplog.text
+    )
+    assert (
+        "Resolution retained_graph run_id=run_resolution_logging "
+        "retained_edge_count=2 retained_component_count=3"
+    ) in caplog.text
+    assert "Resolution complete run_id=run_resolution_logging solved_cluster_count=3" in caplog.text
+    assert "resolved_entity_row_count=5" in caplog.text
+    assert "route_actions={'auto_merge': 1, 'defer': 1, 'keep_separate': 1}" in caplog.text
+    assert "base_confidence={'min': 0.0, 'avg': 0.573333, 'max': 0.92}" in caplog.text
 
 
 def test_run_resolution_raises_for_missing_run_id(tmp_path: Path) -> None:

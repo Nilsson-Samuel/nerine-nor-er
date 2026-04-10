@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
+from time import perf_counter
 from typing import Any
 
 import polars as pl
@@ -41,6 +43,9 @@ from src.resolution.writer import (
     write_resolution_json,
     write_resolved_entities,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 def _load_entities_frame(data_dir: Path | str, run_id: str) -> pl.DataFrame:
@@ -237,6 +242,52 @@ def _count_merged_edges_above_neutral(
     return merged_edge_count
 
 
+def _log_resolution_start(
+    run_id: str,
+    entities: pl.DataFrame,
+    scored_pairs: pl.DataFrame,
+) -> None:
+    """Emit one compact start log with the run workload."""
+    logger.info(
+        "Resolution start run_id=%s entity_count=%d scored_pair_count=%d",
+        run_id,
+        entities.height,
+        scored_pairs.height,
+    )
+
+
+def _log_retained_component_summary(
+    run_id: str,
+    phase1_diagnostics: dict[str, Any],
+) -> None:
+    """Emit the retained-graph summary before solving starts."""
+    logger.info(
+        "Resolution retained_graph run_id=%s retained_edge_count=%d retained_component_count=%d",
+        run_id,
+        int(phase1_diagnostics["retained_edge_count"]),
+        int(phase1_diagnostics["component_count"]),
+    )
+
+
+def _log_resolution_finish(
+    run_id: str,
+    diagnostics: dict[str, Any],
+    *,
+    elapsed_seconds: float,
+) -> None:
+    """Emit one compact finish log with counts and key diagnostics."""
+    logger.info(
+        "Resolution complete run_id=%s solved_cluster_count=%d resolved_entity_row_count=%d "
+        "elapsed_seconds=%.3f route_actions=%s base_confidence=%s",
+        run_id,
+        int(diagnostics["cluster_count"]),
+        int(diagnostics["resolved_entity_row_count"]),
+        elapsed_seconds,
+        diagnostics["selected_route_action_counts"],
+        diagnostics["base_confidence_summary"],
+    )
+
+
 def _build_enriched_diagnostics(
     phase1_diagnostics: dict[str, Any],
     components: list[ComponentState],
@@ -286,6 +337,7 @@ def _build_enriched_diagnostics(
 
 def run_resolution(data_dir: Path | str, run_id: str) -> dict[str, Any]:
     """Run retained-component clustering and persist final resolution artifacts."""
+    start = perf_counter()
     data_dir = Path(data_dir)
     data_dir.mkdir(parents=True, exist_ok=True)
     components_path = get_resolution_components_path(data_dir, run_id)
@@ -295,8 +347,10 @@ def run_resolution(data_dir: Path | str, run_id: str) -> dict[str, Any]:
 
     entities = _load_entities_frame(data_dir, run_id)
     scored_pairs = _load_scored_pairs_frame(data_dir, run_id)
+    _log_resolution_start(run_id, entities, scored_pairs)
     entity_ids = entities.get_column("entity_id").to_list()
     components, phase1_diagnostics = build_phase1_components(run_id, scored_pairs, entity_ids)
+    _log_retained_component_summary(run_id, phase1_diagnostics)
     solved_components = solve_retained_components(components)
     cluster_rows = _make_cluster_rows(components, solved_components)
     cluster_records = build_cluster_records(cluster_rows, entities, scored_pairs)
@@ -333,4 +387,9 @@ def run_resolution(data_dir: Path | str, run_id: str) -> dict[str, Any]:
     write_resolution_json(component_payload, components_path)
     write_resolution_json(diagnostics, diagnostics_path)
     write_resolution_json(clusters_payload, clusters_path)
+    _log_resolution_finish(
+        run_id,
+        diagnostics,
+        elapsed_seconds=perf_counter() - start,
+    )
     return diagnostics
