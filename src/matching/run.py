@@ -1,6 +1,7 @@
 """Matching feature-stage orchestration and artifact writing."""
 
 import logging
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -129,15 +130,40 @@ def run_features(data_dir: Path | str, run_id: str) -> pl.DataFrame:
     Returns:
         Feature table with pair key columns and 14 feature columns.
     """
+    t0 = time.monotonic()
     data_dir = Path(data_dir)
     output_dir = get_matching_run_output_dir(data_dir, run_id)
     pairs_df = load_pairs_with_metadata(data_dir, run_id)
     artifacts = load_embedding_artifacts(data_dir, run_id)
 
+    logger.info(
+        "Matching features start: %d candidate pairs (run_id=%s)",
+        pairs_df.height,
+        run_id,
+    )
+
+    step_t0 = time.monotonic()
+    logger.info("Building string features...")
     string_df = build_string_features(pairs_df)
+    logger.info("Building string features... done in %.1fs", time.monotonic() - step_t0)
+
+    step_t0 = time.monotonic()
+    logger.info("Building embedding features...")
     embedding_df = build_embedding_features(pairs_df, artifacts)
+    logger.info("Building embedding features... done in %.1fs", time.monotonic() - step_t0)
+
+    step_t0 = time.monotonic()
+    logger.info("Building structured identity features...")
     structured_df = build_structured_identity_features(pairs_df)
+    logger.info(
+        "Building structured identity features... done in %.1fs",
+        time.monotonic() - step_t0,
+    )
+
+    step_t0 = time.monotonic()
+    logger.info("Building cooccurrence features...")
     cooccurrence_df = build_cooccurrence_meta_features(pairs_df)
+    logger.info("Building cooccurrence features... done in %.1fs", time.monotonic() - step_t0)
 
     _ensure_row_alignment(pairs_df, string_df, "string features")
     _ensure_row_alignment(pairs_df, embedding_df, "embedding features")
@@ -152,7 +178,15 @@ def run_features(data_dir: Path | str, run_id: str) -> pl.DataFrame:
     _ensure_key_alignment(pairs_df, features_df, "final feature output")
     _log_feature_diagnostics(features_df)
 
+    logger.info("Writing features...")
     write_features(features_df, output_dir)
+    logger.info("Writing features... done")
+    logger.info(
+        "Matching features complete: %d rows in %.1fs (run_id=%s)",
+        features_df.height,
+        time.monotonic() - t0,
+        run_id,
+    )
     return features_df
 
 

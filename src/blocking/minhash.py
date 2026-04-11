@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 
 LSH_THRESHOLD = 0.3
 NUM_PERM = 128
+_MINHASH_PROGRESS_LOG_INTERVAL = 1000
 
 
 def _build_minhash(name: str) -> MinHash:
@@ -42,8 +43,9 @@ def build_minhash_index(
     """
     lsh = MinHashLSH(threshold=LSH_THRESHOLD, num_perm=NUM_PERM)
     signatures: dict[str, MinHash] = {}
+    total_entities = len(entity_ids)
 
-    for eid, name in zip(entity_ids, names):
+    for index, (eid, name) in enumerate(zip(entity_ids, names), start=1):
         m = _build_minhash(name)
         signatures[eid] = m
         try:
@@ -51,6 +53,7 @@ def build_minhash_index(
         except ValueError:
             # Duplicate key — skip (can happen if entity_id already inserted)
             pass
+        _log_progress("MinHash index", index, total_entities)
 
     logger.info(
         "MinHash LSH: %d entities indexed (threshold=%.2f, num_perm=%d)",
@@ -75,12 +78,38 @@ def query_minhash_pairs(
         List of (entity_id_a, entity_id_b) pairs (may contain duplicates).
     """
     pairs: list[tuple[str, str]] = []
-    for eid in entity_ids:
+    total_entities = len(entity_ids)
+    for index, eid in enumerate(entity_ids, start=1):
         m = signatures[eid]
         results = lsh.query(m)
         for neighbor_id in results:
             if neighbor_id != eid:
                 pairs.append((eid, neighbor_id))
+        _log_progress("MinHash query", index, total_entities, raw_pairs=len(pairs))
 
     logger.info("MinHash blocking: %d raw pairs", len(pairs))
     return pairs
+
+
+def _log_progress(
+    stage_name: str,
+    completed: int,
+    total: int,
+    *,
+    raw_pairs: int | None = None,
+) -> None:
+    """Emit low-noise MinHash progress only for large workloads."""
+    if total < _MINHASH_PROGRESS_LOG_INTERVAL:
+        return
+    if completed % _MINHASH_PROGRESS_LOG_INTERVAL != 0 and completed != total:
+        return
+    if raw_pairs is None:
+        logger.info("%s progress: %d/%d entities", stage_name, completed, total)
+        return
+    logger.info(
+        "%s progress: %d/%d entities, %d raw pairs so far",
+        stage_name,
+        completed,
+        total,
+        raw_pairs,
+    )
