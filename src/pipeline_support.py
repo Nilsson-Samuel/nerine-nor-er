@@ -10,10 +10,10 @@ import pyarrow.parquet as pq
 
 from src.matching.writer import (
     get_features_output_path,
-    get_matching_run_output_dir,
     get_scored_pairs_output_path,
     get_scoring_metadata_path,
 )
+from src.shared.paths import get_run_root_dir
 from src.resolution.writer import (
     get_clusters_output_path,
     get_resolution_components_path,
@@ -391,7 +391,7 @@ def collect_artifact_paths(
     summary_path: Path,
 ) -> dict[str, str]:
     """Collect the main per-run artifact paths useful for debugging and HITL."""
-    run_output_dir = get_matching_run_output_dir(data_dir, run_id).parent
+    run_output_dir = get_run_root_dir(data_dir, run_id)
     return {
         "run_output_dir": str(run_output_dir),
         "pipeline_summary_path": str(summary_path),

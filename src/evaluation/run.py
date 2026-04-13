@@ -28,11 +28,8 @@ from src.evaluation.metrics import (
 from src.ingestion.chunking import CHUNK_OVERLAP
 from src.ingestion.extraction import extract_docx_units, extract_pdf_units
 from src.ingestion.normalization import normalize_text
-from src.matching.writer import (
-    RUN_OUTPUTS_DIRNAME,
-    _encode_run_id_path_segment,
-    get_scored_pairs_output_path,
-)
+from src.matching.writer import get_scored_pairs_output_path
+from src.shared.paths import RUN_OUTPUTS_DIRNAME, _encode_run_id_path_segment
 from src.resolution.writer import get_resolved_entities_output_path
 from src.shared import schemas
 from src.synthetic.build_matching_dataset import LABELS_SCHEMA

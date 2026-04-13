@@ -18,10 +18,10 @@ import pyarrow as pa
 
 import pyarrow.parquet as pq
 
-from src.matching.writer import RUN_OUTPUTS_DIRNAME, get_scored_pairs_output_path
+from src.matching.writer import get_scored_pairs_output_path
+from src.shared.paths import RESOLUTION_STAGE_DIRNAME, RUN_OUTPUTS_DIRNAME
 from src.resolution.writer import (
     CLUSTERS_FILENAME,
-    RESOLUTION_STAGE_DIRNAME,
     get_clusters_output_path,
     get_resolved_entities_output_path,
 )

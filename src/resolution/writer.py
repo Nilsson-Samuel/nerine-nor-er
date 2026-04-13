@@ -10,20 +10,14 @@ from typing import Any
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from src.matching.writer import get_matching_run_output_dir
+from src.shared.paths import get_resolution_run_output_dir
 from src.shared.schemas import RESOLVED_ENTITIES_SCHEMA
 
 
-RESOLUTION_STAGE_DIRNAME = "resolution"
 RESOLUTION_COMPONENTS_FILENAME = "resolution_components.json"
 RESOLUTION_DIAGNOSTICS_FILENAME = "resolution_diagnostics.json"
 RESOLVED_ENTITIES_FILENAME = "resolved_entities.parquet"
 CLUSTERS_FILENAME = "clusters.json"
-
-
-def get_resolution_run_output_dir(data_dir: Path | str, run_id: str) -> Path:
-    """Build the per-run resolution output directory."""
-    return get_matching_run_output_dir(data_dir, run_id).parent / RESOLUTION_STAGE_DIRNAME
 
 
 def get_resolution_components_path(data_dir: Path | str, run_id: str) -> Path:
