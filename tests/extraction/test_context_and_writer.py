@@ -12,6 +12,7 @@ Covers validation gate criteria:
 - Full pipeline: mentions → normalize → dedup → context → write → validate
 """
 
+import logging
 from pathlib import Path
 
 import duckdb
@@ -275,6 +276,95 @@ def _write_synthetic_chunks(data_dir: Path, run_id: str, con: duckdb.DuckDBPyCon
     pq.write_table(table, chunks_path)
     con.execute(f"CREATE OR REPLACE TABLE chunks AS SELECT * FROM '{chunks_path}'")
     return chunk_text
+
+
+def _write_chunk_rows(
+    data_dir: Path,
+    run_id: str,
+    chunk_count: int,
+    con: duckdb.DuckDBPyConnection,
+) -> None:
+    """Write a synthetic chunks.parquet with the requested number of rows."""
+    rows = []
+    for index in range(chunk_count):
+        rows.append({
+            "run_id": run_id,
+            "chunk_id": f"{index:032x}",
+            "doc_id": "a" * 32,
+            "chunk_index": index,
+            "text": f"Chunk {index}",
+            "source_unit_kind": "pdf_page",
+            "page_num": index,
+        })
+
+    arrays = {field.name: [] for field in CHUNKS_SCHEMA}
+    for row in rows:
+        for field in CHUNKS_SCHEMA:
+            arrays[field.name].append(row[field.name])
+
+    chunks_path = data_dir / "chunks.parquet"
+    pq.write_table(pa.table(arrays, schema=CHUNKS_SCHEMA), chunks_path)
+    con.execute(f"CREATE OR REPLACE TABLE chunks AS SELECT * FROM '{chunks_path}'")
+
+
+class TestMentionExtractionProgressLogs:
+    def test_logs_start_and_periodic_progress_for_long_runs(
+        self,
+        data_dir: Path,
+        con: duckdb.DuckDBPyConnection,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        from src.extraction.run import run_mention_extraction
+
+        run_id = "progressrun"
+        _write_chunk_rows(data_dir, run_id, 205, con)
+
+        monkeypatch.setattr("src.extraction.run.build_ner", lambda: object())
+        monkeypatch.setattr(
+            "src.extraction.run._extract_chunk_mentions",
+            lambda chunk, ner_pipe: [{
+                "doc_id": chunk["doc_id"],
+                "chunk_id": chunk["chunk_id"],
+                "text": chunk["text"],
+                "type": "PER",
+                "char_start": 0,
+                "char_end": len(chunk["text"]),
+                "page_num": chunk["page_num"],
+                "source_unit_kind": chunk["source_unit_kind"],
+                "source": "ner",
+            }],
+        )
+
+        caplog.set_level(logging.INFO, logger="src.extraction.run")
+        mentions = run_mention_extraction(data_dir, run_id, con)
+
+        assert len(mentions) == 205
+        assert "Extraction start: 205 chunks" in caplog.text
+        assert "Extraction progress: 200/205 chunks in " in caplog.text
+        assert "200 mentions found so far" in caplog.text
+        assert "Mention extraction complete: 205 mentions" in caplog.text
+
+    def test_skips_periodic_progress_for_small_runs(
+        self,
+        data_dir: Path,
+        con: duckdb.DuckDBPyConnection,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        from src.extraction.run import run_mention_extraction
+
+        run_id = "smallrun"
+        _write_chunk_rows(data_dir, run_id, 5, con)
+
+        monkeypatch.setattr("src.extraction.run.build_ner", lambda: object())
+        monkeypatch.setattr("src.extraction.run._extract_chunk_mentions", lambda *args: [])
+
+        caplog.set_level(logging.INFO, logger="src.extraction.run")
+        run_mention_extraction(data_dir, run_id, con)
+
+        assert "Extraction start: 5 chunks" in caplog.text
+        assert "Extraction progress:" not in caplog.text
 
 
 class TestFullPipeline:
