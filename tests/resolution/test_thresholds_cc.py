@@ -13,6 +13,7 @@ import pyarrow.parquet as pq
 import pytest
 
 from src.matching.writer import get_scored_pairs_output_path
+import src.resolution.run as resolution_run
 from src.resolution.clustering import (
     build_phase1_components,
     build_retained_graph,
@@ -251,6 +252,7 @@ def test_run_resolution_writes_component_and_diagnostic_artifacts(tmp_path: Path
 def test_run_resolution_logs_start_summary_and_finish(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     a, b, c, d, e = (_hex32(index) for index in range(1, 6))
     pq.write_table(
@@ -270,21 +272,27 @@ def test_run_resolution_logs_start_summary_and_finish(
         scored_pairs_path,
     )
 
+    monkeypatch.setattr(resolution_run, "PROGRESS_LOG_COMPONENT_INTERVAL", 2)
     caplog.set_level(logging.INFO, logger="src.resolution.run")
 
     run_resolution(tmp_path, "run_resolution_logging")
 
-    assert "Resolution start run_id=run_resolution_logging entity_count=5 scored_pair_count=3" in (
-        caplog.text
-    )
     assert (
-        "Resolution retained_graph run_id=run_resolution_logging "
+        "Resolution start run_id=run_resolution_logging entity_count=5 scored_pair_count=3 "
         "retained_edge_count=2 retained_component_count=3"
     ) in caplog.text
-    assert "Resolution complete run_id=run_resolution_logging solved_cluster_count=3" in caplog.text
-    assert "resolved_entity_row_count=5" in caplog.text
-    assert "route_actions={'auto_merge': 1, 'defer': 1, 'keep_separate': 1}" in caplog.text
-    assert "base_confidence={'min': 0.0, 'avg': 0.573333, 'max': 0.92}" in caplog.text
+    assert (
+        "Resolution progress run_id=run_resolution_logging solved_components=2/3"
+    ) in caplog.text
+    assert "Resolution complete run_id=run_resolution_logging retained_component_count=3" in (
+        caplog.text
+    )
+    assert "retained_edge_count=2 resolved_cluster_count=3" in caplog.text
+    assert "total_elapsed_seconds=" in caplog.text
+    assert "p50_component_ms=" in caplog.text
+    assert "p95_component_ms=" in caplog.text
+    assert "max_component_ms=" in caplog.text
+    assert "slowest_component_size=2" in caplog.text
 
 
 def test_run_resolution_raises_for_missing_run_id(tmp_path: Path) -> None:

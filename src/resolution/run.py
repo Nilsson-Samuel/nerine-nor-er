@@ -22,9 +22,10 @@ from src.resolution.clustering import (
     _size_distribution,
     build_phase1_components,
     component_timing_rows,
-    solve_retained_components,
     summarize_components,
+    summarize_component_timing,
     summarize_timing_by_size_bucket,
+    solve_retained_components,
 )
 from src.resolution.confidence import (
     compute_base_confidence,
@@ -46,6 +47,10 @@ from src.resolution.writer import (
 
 
 logger = logging.getLogger(__name__)
+
+
+# Log periodic solve progress without flooding long handover runs.
+PROGRESS_LOG_COMPONENT_INTERVAL = 25
 
 
 def _load_entities_frame(data_dir: Path | str, run_id: str) -> pl.DataFrame:
@@ -244,28 +249,37 @@ def _count_merged_edges_above_neutral(
 
 def _log_resolution_start(
     run_id: str,
-    entities: pl.DataFrame,
-    scored_pairs: pl.DataFrame,
+    phase1_diagnostics: dict[str, Any],
 ) -> None:
-    """Emit one compact start log with the run workload."""
+    """Emit one compact start log with the retained workload summary."""
     logger.info(
-        "Resolution start run_id=%s entity_count=%d scored_pair_count=%d",
+        "Resolution start run_id=%s entity_count=%d scored_pair_count=%d "
+        "retained_edge_count=%d retained_component_count=%d",
         run_id,
-        entities.height,
-        scored_pairs.height,
+        int(phase1_diagnostics["total_node_count"]),
+        int(phase1_diagnostics["scored_pair_count"]),
+        int(phase1_diagnostics["retained_edge_count"]),
+        int(phase1_diagnostics["component_count"]),
     )
 
 
-def _log_retained_component_summary(
+def _log_resolution_progress(
     run_id: str,
-    phase1_diagnostics: dict[str, Any],
+    solved_count: int,
+    component_count: int,
+    *,
+    elapsed_seconds: float,
+    max_component_ms: float,
 ) -> None:
-    """Emit the retained-graph summary before solving starts."""
+    """Emit periodic solve progress during retained-component clustering."""
     logger.info(
-        "Resolution retained_graph run_id=%s retained_edge_count=%d retained_component_count=%d",
+        "Resolution progress run_id=%s solved_components=%d/%d elapsed_seconds=%.1f "
+        "max_component_ms=%d",
         run_id,
-        int(phase1_diagnostics["retained_edge_count"]),
-        int(phase1_diagnostics["component_count"]),
+        solved_count,
+        component_count,
+        elapsed_seconds,
+        round(max_component_ms),
     )
 
 
@@ -275,16 +289,21 @@ def _log_resolution_finish(
     *,
     elapsed_seconds: float,
 ) -> None:
-    """Emit one compact finish log with counts and key diagnostics."""
+    """Emit one compact finish log with total runtime and timing context."""
+    timing_summary = diagnostics["component_timing_summary"]
     logger.info(
-        "Resolution complete run_id=%s solved_cluster_count=%d resolved_entity_row_count=%d "
-        "elapsed_seconds=%.3f route_actions=%s base_confidence=%s",
+        "Resolution complete run_id=%s retained_component_count=%d retained_edge_count=%d "
+        "resolved_cluster_count=%d total_elapsed_seconds=%.1f p50_component_ms=%d "
+        "p95_component_ms=%d max_component_ms=%d slowest_component_size=%d",
         run_id,
+        int(diagnostics["component_count"]),
+        int(diagnostics["retained_edge_count"]),
         int(diagnostics["cluster_count"]),
-        int(diagnostics["resolved_entity_row_count"]),
         elapsed_seconds,
-        diagnostics["selected_route_action_counts"],
-        diagnostics["base_confidence_summary"],
+        round(float(timing_summary["p50_elapsed_ms"])),
+        round(float(timing_summary["p95_elapsed_ms"])),
+        round(float(timing_summary["max_elapsed_ms"])),
+        int(timing_summary["slowest_component_size"]),
     )
 
 
@@ -329,6 +348,7 @@ def _build_enriched_diagnostics(
                 cluster_rows,
             ),
             "component_timings": timing_rows,
+            "component_timing_summary": summarize_component_timing(timing_rows),
             "timing_by_size_bucket": summarize_timing_by_size_bucket(timing_rows),
         }
     )
@@ -347,11 +367,30 @@ def run_resolution(data_dir: Path | str, run_id: str) -> dict[str, Any]:
 
     entities = _load_entities_frame(data_dir, run_id)
     scored_pairs = _load_scored_pairs_frame(data_dir, run_id)
-    _log_resolution_start(run_id, entities, scored_pairs)
     entity_ids = entities.get_column("entity_id").to_list()
     components, phase1_diagnostics = build_phase1_components(run_id, scored_pairs, entity_ids)
-    _log_retained_component_summary(run_id, phase1_diagnostics)
-    solved_components = solve_retained_components(components)
+    _log_resolution_start(run_id, phase1_diagnostics)
+
+    def log_progress(
+        solved_count: int,
+        component_count: int,
+        elapsed_seconds: float,
+        max_component_ms: float,
+    ) -> None:
+        """Bridge solve-loop progress into the stage logger."""
+        _log_resolution_progress(
+            run_id,
+            solved_count,
+            component_count,
+            elapsed_seconds=elapsed_seconds,
+            max_component_ms=max_component_ms,
+        )
+
+    solved_components = solve_retained_components(
+        components,
+        progress_every=PROGRESS_LOG_COMPONENT_INTERVAL,
+        progress_callback=log_progress,
+    )
     cluster_rows = _make_cluster_rows(components, solved_components)
     cluster_records = build_cluster_records(cluster_rows, entities, scored_pairs)
     resolved_rows = build_resolved_entity_rows(cluster_records)
@@ -370,6 +409,7 @@ def run_resolution(data_dir: Path | str, run_id: str) -> dict[str, Any]:
         cluster_rows,
     )
     diagnostics["resolved_entity_row_count"] = len(resolved_rows)
+    diagnostics["elapsed_seconds"] = round(perf_counter() - start, 3)
     component_payload = {
         "run_id": run_id,
         "component_count": len(components),
@@ -390,6 +430,6 @@ def run_resolution(data_dir: Path | str, run_id: str) -> dict[str, Any]:
     _log_resolution_finish(
         run_id,
         diagnostics,
-        elapsed_seconds=perf_counter() - start,
+        elapsed_seconds=float(diagnostics["elapsed_seconds"]),
     )
     return diagnostics
