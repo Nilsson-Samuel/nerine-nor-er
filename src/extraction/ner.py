@@ -19,6 +19,7 @@ import logging
 import re
 from typing import Any
 
+from src.extraction.regex_supplements import NORWEGIAN_ADDRESS_SUFFIXES
 from transformers import pipeline as hf_pipeline
 
 logger = logging.getLogger(__name__)
@@ -71,12 +72,64 @@ _ORG_SUFFIX_RE = re.compile(
     re.IGNORECASE,
 )
 
+_NORWEGIAN_ADDRESS_SUFFIX_PATTERN = "|".join(
+    re.escape(suffix) for suffix in NORWEGIAN_ADDRESS_SUFFIXES
+)
+
 # Suffix patterns that indicate an entity is a LOC even when the NER model
 # labels it as ORG. No leading \b — Norwegian compound street names fuse the
 # suffix into the word (e.g. "Storgata", "Parkveien").
 _LOC_SUFFIX_RE = re.compile(
-    r"(?:gate|gata|gaten|vei|veien|allé|plass|plassen|torg|torget"
-    r"|street|road|avenue|square|lane|drive)\s*\d*\s*$",
+    rf"(?:{_NORWEGIAN_ADDRESS_SUFFIX_PATTERN}|street|road|avenue|square|lane|drive)"
+    rf"\s*\d*\s*$",
+    re.IGNORECASE,
+)
+
+# Comma-merging is intentionally narrower than "same type + ', '": only LOC
+# pairs that look like a specific place/address head followed by a locality
+# are merged, which avoids collapsing plain lists like "Oslo, Bergen".
+_NORWEGIAN_PLACE_NAME_SUFFIXES = (
+    "bakken",
+    "berget",
+    "enga",
+    "fjellet",
+    "gården",
+    "haugen",
+    "heim",
+    "holtet",
+    "huset",
+    "hytta",
+    "kroken",
+    "lia",
+    "løkka",
+    "moen",
+    "neset",
+    "odden",
+    "plassen",
+    "setra",
+    "stua",
+    "svingen",
+    "sætra",
+    "toppen",
+    "tunet",
+    "vika",
+    "viken",
+    "vollen",
+    "åsen",
+)
+_NORWEGIAN_PLACE_NAME_SUFFIX_PATTERN = "|".join(
+    re.escape(suffix) for suffix in _NORWEGIAN_PLACE_NAME_SUFFIXES
+)
+_LOC_COMMA_PLACE_HEAD_RE = re.compile(
+    rf"(?:{_NORWEGIAN_PLACE_NAME_SUFFIX_PATTERN})\s*$",
+    re.IGNORECASE,
+)
+_LOC_COMMA_ADDRESS_HEAD_RE = re.compile(
+    rf"(?:{_NORWEGIAN_ADDRESS_SUFFIX_PATTERN})(?:\s+\d+[A-Za-z]?)?\s*$",
+    re.IGNORECASE,
+)
+_LOC_COMMA_LOCALITY_TAIL_RE = re.compile(
+    r"(?:[A-ZÆØÅ][a-zæøå]+|[A-ZÆØÅ]{2,})(?:-[A-ZÆØÅ][A-ZÆØÅa-zæøå]+)?\s*$",
     re.IGNORECASE,
 )
 
@@ -218,16 +271,18 @@ def _repair_span_boundaries(spans: list[dict]) -> list[dict]:
 
 
 def _merge_comma_separated_spans(spans: list[dict], chunk_text: str) -> list[dict]:
-    """Merge adjacent same-type spans separated by exactly ', ' into one span.
+    """Merge safe comma-separated LOC compounds into one span.
 
     Handles compound location forms like "Skogsstua, Hammerfest" where the NER
     model returns two adjacent LOC spans with a comma-space gap (2 chars) that
-    _repair_span_boundaries intentionally leaves unmerged to avoid incorrect
-    cross-type merges like "St Mary stasjon, Essex Constabulary".
+    _repair_span_boundaries intentionally leaves unmerged. The merge stays
+    narrow: only LOC spans are considered, the merged text must not look like
+    an ORG, the left side must resemble a specific place head or numbered
+    address, and the right side must look like a single-token locality tail.
 
-    The guard check ensures the merged text would not trigger ORG type
-    correction — so "St Mary stasjon, Essex Constabulary" is never merged here
-    (the constabulary suffix would fire), but "Skogsstua, Hammerfest" is.
+    That keeps "St Mary stasjon, Essex Constabulary", "Bergen stasjon, London
+    Underground", and "Oslo, Bergen" split, while still allowing safe
+    compounds like "Skogsstua, Hammerfest" and "Klokkersvingen 1, RYGGE".
 
     Args:
         spans: Span list after _repair_span_boundaries.
@@ -244,18 +299,36 @@ def _merge_comma_separated_spans(spans: list[dict], chunk_text: str) -> list[dic
     for span in spans[1:]:
         prev = result[-1]
         gap = span["start"] - prev["end"]
+        merged_text = chunk_text[prev["start"]: span["end"]]
+        prev_text = chunk_text[prev["start"]: prev["end"]]
 
         if (
             gap == 2
-            and span["type"] == prev["type"]
+            and prev["type"] == "LOC"
+            and span["type"] == "LOC"
             and chunk_text[prev["end"]: span["start"]] == ", "
-            and not _ORG_SUFFIX_RE.search(chunk_text[prev["start"]: span["end"]])
+            and _looks_like_loc_comma_head(prev_text)
+            and _looks_like_locality_tail(chunk_text[span["start"]: span["end"]])
+            and not _ORG_SUFFIX_RE.search(merged_text)
         ):
             prev["end"] = span["end"]
         else:
             result.append(span.copy())
 
     return result
+
+
+def _looks_like_loc_comma_head(text: str) -> bool:
+    """Return True for safe left-hand LOC heads in comma compounds."""
+    return bool(
+        _LOC_COMMA_PLACE_HEAD_RE.search(text)
+        or _LOC_COMMA_ADDRESS_HEAD_RE.search(text)
+    )
+
+
+def _looks_like_locality_tail(text: str) -> bool:
+    """Return True for a conservative single-token locality tail."""
+    return bool(_LOC_COMMA_LOCALITY_TAIL_RE.fullmatch(text.strip()))
 
 
 def _correct_entity_type(text: str, current_type: str) -> str:
@@ -280,16 +353,14 @@ def _correct_entity_type(text: str, current_type: str) -> str:
 
 
 def _filter_short_fragments(mentions: list[dict]) -> list[dict]:
-    """Remove implausible mentions by length and ORG-specific capitalization rules.
+    """Remove implausible mentions by length and ORG-specific noise rules.
 
     Two checks are applied:
     1. Length filter — drops spans shorter than a per-type minimum, removing
        tokenizer artifacts like "Dor", "Scot", "Sty".
-    2. Single-token ORG capitalization filter — drops single-word ORG mentions
-       whose first character is not uppercase. Legitimate single-token ORGs are
-       always proper nouns ("DNB", "Kripos") or uppercase abbreviations.
-       Lowercase single-token spans ("det", "gruppe") and job-title abbreviations
-       ("Kb") are model noise from fragmented compound words.
+    2. Single-token ORG noise filter — drops lowercase single-word ORGs and
+       very short non-acronym fragments like "Kb", while keeping plausible
+       forms such as "DNB", "FBI", and "Kripos".
 
     Args:
         mentions: Post-processed mention dicts.
@@ -309,10 +380,12 @@ def _filter_short_fragments(mentions: list[dict]) -> list[dict]:
             dropped += 1
             continue
 
-        # Single-token ORG must start with an uppercase letter
-        if m["type"] == "ORG" and " " not in text and not text[0].isupper():
-            dropped += 1
-            continue
+        if m["type"] == "ORG" and " " not in text:
+            # Keep all-caps acronyms, but drop lowercase noise and very short
+            # title-cased fragments that are usually tokenizer leftovers.
+            if not text.isupper() and (not text[0].isupper() or len(text) < 3):
+                dropped += 1
+                continue
 
         kept.append(m)
 

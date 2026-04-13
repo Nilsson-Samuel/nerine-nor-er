@@ -563,6 +563,9 @@ class TestTypeCorrection:
     def test_vei_org_to_loc(self):
         assert _correct_entity_type("Parkveien 31", "ORG") == "LOC"
 
+    def test_svingen_org_to_loc(self):
+        assert _correct_entity_type("Klokkersvingen 1", "ORG") == "LOC"
+
     def test_per_type_unchanged(self):
         # Type correction only applies to LOC↔ORG, not PER
         assert _correct_entity_type("Essex Constabulary", "PER") == "PER"
@@ -627,6 +630,10 @@ class TestShortFragmentFilter:
         for word in ("det", "gruppe", "kriminal"):
             mentions = [{"text": word, "type": "ORG", "source": "ner"}]
             assert _filter_short_fragments(mentions) == [], f"Expected {word!r} to be dropped"
+
+    def test_short_titlecase_single_token_org_dropped(self):
+        mentions = [{"text": "Kb", "type": "ORG", "source": "ner"}]
+        assert _filter_short_fragments(mentions) == []
 
     def test_uppercase_abbreviation_org_kept(self):
         # "DNB", "FBI" — uppercase abbreviations are legitimate single-token ORGs
@@ -801,12 +808,69 @@ class TestCommaSpanMerge:
         assert len(result) == 1
         assert result[0] == {"start": 13, "end": 34, "type": "LOC"}
 
+    def test_numbered_address_and_city_merged(self):
+        text = "Klokkersvingen 1, RYGGE ligger ved sentrum."
+        spans = [
+            {"start": 0, "end": 16, "type": "LOC"},   # "Klokkersvingen 1"
+            {"start": 18, "end": 23, "type": "LOC"},  # "RYGGE"
+        ]
+        result = _merge_comma_separated_spans(spans, text)
+        assert len(result) == 1
+        assert result[0] == {"start": 0, "end": 23, "type": "LOC"}
+
+    def test_address_suffix_without_number_and_city_merged(self):
+        text = "Rådhusplassen, Oslo var sperret."
+        spans = [
+            {"start": 0, "end": 13, "type": "LOC"},
+            {"start": 15, "end": 19, "type": "LOC"},
+        ]
+        result = _merge_comma_separated_spans(spans, text)
+        assert len(result) == 1
+        assert result[0] == {"start": 0, "end": 19, "type": "LOC"}
+
+    def test_common_place_name_suffix_and_city_merged(self):
+        text = "Solbakken, Tromsø ble nevnt i avhøret."
+        spans = [
+            {"start": 0, "end": 9, "type": "LOC"},
+            {"start": 11, "end": 17, "type": "LOC"},
+        ]
+        result = _merge_comma_separated_spans(spans, text)
+        assert len(result) == 1
+        assert result[0] == {"start": 0, "end": 17, "type": "LOC"}
+
     def test_org_suffix_in_merged_span_prevents_merge(self):
         # "St Mary stasjon, Essex Constabulary" — constabulary suffix blocks merge
         text = "St Mary stasjon, Essex Constabulary mottok meldingen."
         spans = [
             {"start": 0, "end": 15, "type": "LOC"},   # "St Mary stasjon"
             {"start": 17, "end": 35, "type": "LOC"},  # "Essex Constabulary"
+        ]
+        result = _merge_comma_separated_spans(spans, text)
+        assert len(result) == 2
+
+    def test_station_with_multiword_tail_not_merged(self):
+        text = "Bergen stasjon, London Underground ble omtalt."
+        spans = [
+            {"start": 0, "end": 14, "type": "LOC"},
+            {"start": 16, "end": 34, "type": "LOC"},
+        ]
+        result = _merge_comma_separated_spans(spans, text)
+        assert len(result) == 2
+
+    def test_plain_loc_list_not_merged(self):
+        text = "Oslo, Bergen er to byer."
+        spans = [
+            {"start": 0, "end": 4, "type": "LOC"},
+            {"start": 6, "end": 12, "type": "LOC"},
+        ]
+        result = _merge_comma_separated_spans(spans, text)
+        assert len(result) == 2
+
+    def test_same_type_org_list_not_merged(self):
+        text = "Apple, Google samarbeider."
+        spans = [
+            {"start": 0, "end": 5, "type": "ORG"},
+            {"start": 7, "end": 13, "type": "ORG"},
         ]
         result = _merge_comma_separated_spans(spans, text)
         assert len(result) == 2
@@ -854,6 +918,16 @@ class TestCommaSpanMergeIntegration:
         assert mentions[0]["text"] == "Skogsstua, Hammerfest"
         assert mentions[0]["type"] == "LOC"
 
+    def test_place_suffix_and_city_merged(self):
+        text = "Solbakken, Tromsø ble nevnt i avhøret."
+        ner_pipe = lambda _: [
+            {"entity_group": "LOC", "start": 0, "end": 9},
+            {"entity_group": "LOC", "start": 11, "end": 17},
+        ]
+        mentions = extract_ner_mentions(text, ner_pipe=ner_pipe, **_CHUNK_META)
+        assert len(mentions) == 1
+        assert mentions[0]["text"] == "Solbakken, Tromsø"
+
     def test_st_mary_constabulary_not_merged(self):
         # After comma-merge the merged text has constabulary suffix → not merged
         text = "St Mary stasjon, Essex Constabulary mottok meldingen."
@@ -868,6 +942,26 @@ class TestCommaSpanMergeIntegration:
         assert loc[0]["text"] == "St Mary stasjon"
         assert len(org) == 1
         assert org[0]["text"] == "Essex Constabulary"
+
+    def test_oslo_bergen_not_merged(self):
+        text = "Oslo, Bergen er to byer."
+        ner_pipe = lambda _: [
+            {"entity_group": "LOC", "start": 0, "end": 4},
+            {"entity_group": "LOC", "start": 6, "end": 12},
+        ]
+        mentions = extract_ner_mentions(text, ner_pipe=ner_pipe, **_CHUNK_META)
+        assert len(mentions) == 2
+        assert [m["text"] for m in mentions] == ["Oslo", "Bergen"]
+
+    def test_station_and_multiword_tail_not_merged(self):
+        text = "Bergen stasjon, London Underground ble omtalt."
+        ner_pipe = lambda _: [
+            {"entity_group": "LOC", "start": 0, "end": 14},
+            {"entity_group": "LOC", "start": 16, "end": 34},
+        ]
+        mentions = extract_ner_mentions(text, ner_pipe=ner_pipe, **_CHUNK_META)
+        assert len(mentions) == 2
+        assert [m["text"] for m in mentions] == ["Bergen stasjon", "London Underground"]
 
 
 # ---------------------------------------------------------------------------
@@ -963,3 +1057,19 @@ class TestMergeRegexWithNer:
         assert len(kept_regex) == 1
         assert len(kept_ner) == 1
         assert kept_ner[0]["char_start"] == 30
+
+    def test_address_org_fragment_corrected_before_regex_superset_merge(self):
+        text = "Adressen er Klokkersvingen 1, 1580 RYGGE i kommunen."
+        ner_pipe = lambda _: [
+            {"entity_group": "ORG", "start": 12, "end": 28},  # "Klokkersvingen 1"
+            {"entity_group": "LOC", "start": 35, "end": 40},  # "RYGGE"
+        ]
+
+        ner_mentions = extract_ner_mentions(text, ner_pipe=ner_pipe, **_CHUNK_META)
+        regex_mentions = extract_regex_mentions(text, **_CHUNK_META)
+        kept_regex, kept_ner = merge_regex_with_ner(regex_mentions, ner_mentions)
+
+        assert kept_ner == []
+        assert len(kept_regex) == 1
+        assert kept_regex[0]["type"] == "LOC"
+        assert kept_regex[0]["text"] == "Klokkersvingen 1, 1580 RYGGE"

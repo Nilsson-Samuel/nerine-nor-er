@@ -11,6 +11,33 @@ import re
 
 logger = logging.getLogger(__name__)
 
+# Shared Norwegian address suffix vocabulary used by both regex extraction
+# and NER post-processing, so the two layers stay aligned on address forms.
+NORWEGIAN_ADDRESS_SUFFIXES: tuple[str, ...] = (
+    "gate",
+    "gata",
+    "gaten",
+    "vei",
+    "veien",
+    "allé",
+    "alléen",
+    "plass",
+    "plassen",
+    "torg",
+    "torget",
+    "stien",
+    "sti",
+    "bakken",
+    "løkka",
+    "svingen",
+    "tunet",
+    "kroken",
+)
+_NORWEGIAN_ADDRESS_SUFFIX_PATTERN = "|".join(
+    re.escape(suffix) for suffix in NORWEGIAN_ADDRESS_SUFFIXES
+)
+_POSTAL_TAIL_PATTERN = r"(?:,\s\d{4}\s[A-ZÆØÅ][A-ZÆØÅa-zæøå]+)?"
+
 # Compiled patterns grouped by target entity type.
 # Order within each type list matters: first match wins for a given span.
 PATTERNS: dict[str, list[re.Pattern[str]]] = {
@@ -61,23 +88,19 @@ PATTERNS: dict[str, list[re.Pattern[str]]] = {
         # Compound: capitalized word ending in a street suffix + optional number
         #           + optional ", NNNN City" postal tail
         re.compile(
-            r"\b[A-ZÆØÅ][a-zæøå]*"
-            r"(?:gata|gaten|gate|veien|vei|allé[en]?"
-            r"|plassen|plass|torget|torg|stien|sti"
-            r"|bakken|løkka|svingen|tunet|kroken)"
-            r"(?:\s\d{1,4}[A-Za-z]?)?"
-            r"(?:,\s\d{4}\s[A-ZÆØÅ][A-ZÆØÅa-zæøå]+)?\b",
+            rf"\b[A-ZÆØÅ][A-ZÆØÅa-zæøå]*"
+            rf"(?:{_NORWEGIAN_ADDRESS_SUFFIX_PATTERN})"
+            rf"(?:\s\d{{1,4}}[A-Za-z]?)?"
+            rf"{_POSTAL_TAIL_PATTERN}\b",
         ),
         # Multi-word: one or more capitalized words + space + street suffix
         #             + optional number + optional ", NNNN City" postal tail
         re.compile(
-            r"\b[A-ZÆØÅ][a-zæøå]+"
-            r"(?:\s[A-ZÆØÅ][a-zæøå]+)*"
-            r"\s(?:gate|gata|gaten|vei|veien|allé"
-            r"|plass|plassen|torg|torget|stien|sti"
-            r"|bakken|løkka|svingen|tunet|kroken)"
-            r"(?:\s\d{1,4}[A-Za-z]?)?"
-            r"(?:,\s\d{4}\s[A-ZÆØÅ][A-ZÆØÅa-zæøå]+)?\b",
+            rf"\b[A-ZÆØÅ][a-zæøå]+"
+            rf"(?:\s[A-ZÆØÅ][a-zæøå]+)*"
+            rf"\s(?:{_NORWEGIAN_ADDRESS_SUFFIX_PATTERN})"
+            rf"(?:\s\d{{1,4}}[A-Za-z]?)?"
+            rf"{_POSTAL_TAIL_PATTERN}\b",
         ),
     ],
 }
