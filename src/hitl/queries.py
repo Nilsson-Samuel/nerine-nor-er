@@ -19,7 +19,12 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from src.matching.writer import get_scored_pairs_output_path
-from src.shared.paths import RESOLUTION_STAGE_DIRNAME, RUN_OUTPUTS_DIRNAME
+from src.shared.paths import (
+    RESOLUTION_STAGE_DIRNAME,
+    RUN_OUTPUTS_DIRNAME,
+    get_extraction_run_output_dir,
+    get_ingestion_run_output_dir,
+)
 from src.resolution.writer import (
     CLUSTERS_FILENAME,
     get_clusters_output_path,
@@ -319,7 +324,7 @@ def load_cluster_members(
     type, doc_id, count, context, chunk_id, char_start, char_end.
     Returns an empty frame if the parquet files are missing or unreadable.
     """
-    entities_path = data_dir / "entities.parquet"
+    entities_path = get_extraction_run_output_dir(data_dir, run_id) / "entities.parquet"
 
     if member_ids is None:
         member_ids = load_cluster_member_ids(data_dir, run_id, cluster_id)
@@ -422,7 +427,7 @@ def load_doc_paths(data_dir: Path, run_id: str) -> dict[str, str]:
     Returns a dict mapping each doc_id to its source file path.
     Returns an empty dict if docs.parquet is missing or unreadable.
     """
-    docs_path = data_dir / "docs.parquet"
+    docs_path = get_ingestion_run_output_dir(data_dir, run_id) / "docs.parquet"
     if not docs_path.exists():
         return {}
 

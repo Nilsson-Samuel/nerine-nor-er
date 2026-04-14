@@ -31,6 +31,7 @@ from src.matching.writer import (
     write_scoring_metadata,
 )
 from src.shared import schemas
+from src.shared.paths import get_blocking_run_output_dir
 
 
 logger = logging.getLogger(__name__)
@@ -170,7 +171,7 @@ def _load_feature_rows(data_dir: Path, run_id: str) -> pl.DataFrame:
 def _load_candidate_pairs_for_scoring(data_dir: Path, run_id: str) -> pl.DataFrame:
     """Load candidate pairs needed for scored output in stable pair order."""
     return (
-        pl.read_parquet(data_dir / "candidate_pairs.parquet")
+        pl.read_parquet(get_blocking_run_output_dir(data_dir, run_id) / "candidate_pairs.parquet")
         .filter(pl.col("run_id") == run_id)
         .sort(["entity_id_a", "entity_id_b"])
     )

@@ -21,6 +21,7 @@ from src.extraction.regex_supplements import (
     merge_regex_with_ner,
 )
 from src.extraction.writer import write_entities_parquet
+from src.shared.paths import get_extraction_run_output_dir, get_ingestion_run_output_dir
 from src.shared.schemas import validate_contract_rules
 
 logger = logging.getLogger(__name__)
@@ -61,7 +62,8 @@ def run_extraction(
         return run_id
 
     # Step 3: Attach context windows (needs chunk text lookup)
-    chunk_texts = _build_chunk_text_lookup(data_dir / "chunks.parquet", run_id, con)
+    chunks_path = get_ingestion_run_output_dir(data_dir, run_id) / "chunks.parquet"
+    chunk_texts = _build_chunk_text_lookup(chunks_path, run_id, con)
     _attach_contexts(entities, chunk_texts)
 
     # Step 4: Write entities.parquet
@@ -111,7 +113,7 @@ def run_mention_extraction(
         con = duckdb.connect()
 
     data_dir = Path(data_dir)
-    chunks_path = data_dir / "chunks.parquet"
+    chunks_path = get_ingestion_run_output_dir(data_dir, run_id) / "chunks.parquet"
 
     if not chunks_path.exists():
         logger.warning("No chunks.parquet found at %s", chunks_path)

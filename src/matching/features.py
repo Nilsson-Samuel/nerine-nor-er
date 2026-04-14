@@ -23,6 +23,7 @@ import pyarrow.parquet as pq
 from metaphone import doublemetaphone
 from rapidfuzz.distance import JaroWinkler, Levenshtein
 
+from src.shared.paths import get_blocking_run_output_dir, get_extraction_run_output_dir
 from src.shared.validators import validate_embedding_alignment
 
 
@@ -101,10 +102,12 @@ def _execute_pairs_query(
 
     data_dir = Path(db_path_or_con)
     with duckdb.connect() as con:
-        con.register("entities", con.read_parquet(str(data_dir / "entities.parquet")))
+        entities_path = get_extraction_run_output_dir(data_dir, run_id) / "entities.parquet"
+        candidate_pairs_path = get_blocking_run_output_dir(data_dir, run_id) / "candidate_pairs.parquet"
+        con.register("entities", con.read_parquet(str(entities_path)))
         con.register(
             "candidate_pairs",
-            con.read_parquet(str(data_dir / "candidate_pairs.parquet")),
+            con.read_parquet(str(candidate_pairs_path)),
         )
         table = con.execute(query, [run_id]).fetch_arrow_table()
         return pl.from_arrow(table)
@@ -210,13 +213,14 @@ def load_embedding_artifacts(data_dir: Path | str, run_id: str) -> EmbeddingArti
     - entities.parquet (source of the expected per-run entity_id order)
     """
     data_dir = Path(data_dir)
-    embeddings = np.load(data_dir / "embeddings.npy", allow_pickle=False)
-    context_embeddings = np.load(data_dir / "context_embeddings.npy", allow_pickle=False)
-    embedding_entity_ids = np.load(data_dir / "embedding_entity_ids.npy", allow_pickle=False)
+    blocking_dir = get_blocking_run_output_dir(data_dir, run_id)
+    embeddings = np.load(blocking_dir / "embeddings.npy", allow_pickle=False)
+    context_embeddings = np.load(blocking_dir / "context_embeddings.npy", allow_pickle=False)
+    embedding_entity_ids = np.load(blocking_dir / "embedding_entity_ids.npy", allow_pickle=False)
     entities = (
         pl.from_arrow(
             pq.read_table(
-                data_dir / "entities.parquet",
+                get_extraction_run_output_dir(data_dir, run_id) / "entities.parquet",
                 columns=["entity_id", "run_id"],
                 filters=[("run_id", "=", run_id)],
             )

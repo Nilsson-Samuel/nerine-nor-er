@@ -25,6 +25,7 @@ from src.blocking.faiss_index import DEFAULT_K, build_hnsw_index, query_neighbor
 from src.blocking.minhash import build_minhash_index, query_minhash_pairs
 from src.blocking.phonetic import build_phonetic_index, query_phonetic_pairs
 from src.blocking.writer import write_candidate_pairs, write_handoff_manifest
+from src.shared.paths import get_blocking_run_output_dir
 from src.shared.schemas import validate_contract_rules
 
 logger = logging.getLogger(__name__)
@@ -75,8 +76,9 @@ def run_blocking(
     structured_pairs = build_structured_id_pairs(entity_ids, names, types_list)
 
     # ── Step 3: Embed ──────────────────────────────────────────────────
+    blocking_out_dir = get_blocking_run_output_dir(data_dir, run_id)
     embeddings, _ctx_emb = encode_and_persist(
-        entity_ids, names, contexts, data_dir,
+        entity_ids, names, contexts, blocking_out_dir,
     )
 
     # ── Step 4: FAISS blocking ─────────────────────────────────────────
@@ -112,13 +114,13 @@ def run_blocking(
         entity_count=len(entity_ids),
         candidate_count=candidate_count,
         entity_types_present=entity_types_present,
-        out_dir=data_dir,
+        data_dir=data_dir,
         embedding_dim=EMBEDDING_DIM,
         k=k,
     )
 
     # ── Step 10: Final validation ──────────────────────────────────────
-    _validate_outputs(data_dir)
+    _validate_outputs(data_dir, run_id)
 
     elapsed = time.monotonic() - t0
     logger.info(
@@ -139,9 +141,9 @@ def _load_entity_types(
     return {r[0]: r[1] for r in rows}
 
 
-def _validate_outputs(data_dir: Path) -> None:
+def _validate_outputs(data_dir: Path, run_id: str) -> None:
     """Run contract validation on candidate_pairs.parquet."""
-    cp_path = data_dir / "candidate_pairs.parquet"
+    cp_path = get_blocking_run_output_dir(data_dir, run_id) / "candidate_pairs.parquet"
     if not cp_path.exists():
         raise FileNotFoundError(f"Expected {cp_path} after blocking")
 
