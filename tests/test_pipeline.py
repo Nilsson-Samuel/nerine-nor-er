@@ -24,6 +24,11 @@ from src.resolution.writer import (
     get_resolved_entities_output_path,
 )
 from src.shared import schemas
+from src.shared.paths import (
+    get_blocking_run_output_dir,
+    get_extraction_run_output_dir,
+    get_ingestion_run_output_dir,
+)
 
 
 def _hex32(number: int) -> str:
@@ -33,6 +38,8 @@ def _hex32(number: int) -> str:
 
 def _write_ingestion_outputs(data_dir: Path, run_id: str) -> None:
     """Write minimal docs/chunks parquet outputs for one run."""
+    out_dir = get_ingestion_run_output_dir(data_dir, run_id)
+    out_dir.mkdir(parents=True, exist_ok=True)
     docs_table = pa.table(
         {
             "run_id": pa.array([run_id], type=pa.string()),
@@ -61,12 +68,14 @@ def _write_ingestion_outputs(data_dir: Path, run_id: str) -> None:
         },
         schema=schemas.CHUNKS_SCHEMA,
     )
-    pq.write_table(docs_table, data_dir / "docs.parquet")
-    pq.write_table(chunks_table, data_dir / "chunks.parquet")
+    pq.write_table(docs_table, out_dir / "docs.parquet")
+    pq.write_table(chunks_table, out_dir / "chunks.parquet")
 
 
 def _write_extraction_outputs(data_dir: Path, run_id: str) -> None:
     """Write a minimal entities parquet output for one run."""
+    out_dir = get_extraction_run_output_dir(data_dir, run_id)
+    out_dir.mkdir(parents=True, exist_ok=True)
     entities_table = pa.table(
         {
             "run_id": pa.array([run_id], type=pa.string()),
@@ -93,16 +102,20 @@ def _write_extraction_outputs(data_dir: Path, run_id: str) -> None:
         },
         schema=schemas.ENTITIES_SCHEMA,
     )
-    pq.write_table(entities_table, data_dir / "entities.parquet")
+    pq.write_table(entities_table, out_dir / "entities.parquet")
 
 
-def _write_empty_entities_output(data_dir: Path) -> None:
+def _write_empty_entities_output(data_dir: Path, run_id: str) -> None:
     """Write an empty but schema-valid entities parquet file."""
-    pq.write_table(schemas.ENTITIES_SCHEMA.empty_table(), data_dir / "entities.parquet")
+    out_dir = get_extraction_run_output_dir(data_dir, run_id)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    pq.write_table(schemas.ENTITIES_SCHEMA.empty_table(), out_dir / "entities.parquet")
 
 
 def _write_blocking_outputs(data_dir: Path, run_id: str) -> None:
     """Write minimal blocking outputs for one run."""
+    out_dir = get_blocking_run_output_dir(data_dir, run_id)
+    out_dir.mkdir(parents=True, exist_ok=True)
     candidate_pairs_table = pa.table(
         {
             "run_id": pa.array([run_id], type=pa.string()),
@@ -114,8 +127,8 @@ def _write_blocking_outputs(data_dir: Path, run_id: str) -> None:
         },
         schema=schemas.CANDIDATE_PAIRS_SCHEMA,
     )
-    pq.write_table(candidate_pairs_table, data_dir / "candidate_pairs.parquet")
-    (data_dir / "handoff_manifest.json").write_text(
+    pq.write_table(candidate_pairs_table, out_dir / "candidate_pairs.parquet")
+    (out_dir / "handoff_manifest.json").write_text(
         json.dumps({"run_id": run_id, "candidate_count": 1}),
         encoding="utf-8",
     )
@@ -430,7 +443,7 @@ def test_run_pipeline_stops_cleanly_when_extraction_writes_zero_entities(
         return run_id or ""
 
     def fake_extraction(data_dir_arg: Path, run_id_arg: str) -> str:
-        _write_empty_entities_output(data_dir_arg)
+        _write_empty_entities_output(data_dir_arg, run_id_arg)
         return run_id_arg
 
     def unexpected(*_args: object, **_kwargs: object) -> None:
@@ -522,7 +535,7 @@ def test_summarize_stage_allows_zero_entities_without_artifacts(tmp_path: Path) 
 def test_summarize_stage_reads_zero_row_entities_file(tmp_path: Path) -> None:
     data_dir = tmp_path / "data"
     data_dir.mkdir()
-    _write_empty_entities_output(data_dir)
+    _write_empty_entities_output(data_dir, "run_zero_file")
     stage_spec = pipeline_support.build_stage_specs(
         case_root=tmp_path / "case",
         data_dir=data_dir,

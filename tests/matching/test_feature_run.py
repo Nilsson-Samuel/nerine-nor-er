@@ -8,6 +8,7 @@ import pytest
 from src.matching.run import run_features
 from src.matching.writer import get_features_output_path
 from src.shared.fixtures import DEFAULT_RUN_ID, write_mock_handoff
+from src.shared.paths import get_blocking_run_output_dir
 
 
 EXPECTED_FEATURE_COLUMNS = [
@@ -45,7 +46,7 @@ def test_run_features_writes_features_parquet(handoff_dir: Path) -> None:
 def test_run_features_row_count_matches_candidate_pairs(handoff_dir: Path) -> None:
     run_features(handoff_dir, DEFAULT_RUN_ID)
     features = pl.read_parquet(get_features_output_path(handoff_dir, DEFAULT_RUN_ID))
-    candidates = pl.read_parquet(handoff_dir / "candidate_pairs.parquet").filter(
+    candidates = pl.read_parquet(get_blocking_run_output_dir(handoff_dir, DEFAULT_RUN_ID) / "candidate_pairs.parquet").filter(
         pl.col("run_id") == DEFAULT_RUN_ID
     )
     assert features.height == candidates.height

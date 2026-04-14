@@ -31,6 +31,7 @@ from src.ingestion.run import (
     run_extraction_and_normalization,
     run_ingestion,
 )
+from src.shared.paths import get_ingestion_run_output_dir
 from src.shared.schemas import validate, validate_contract_rules, CHUNKS_SCHEMA
 
 
@@ -333,18 +334,19 @@ class TestRunIngestion:
         self, case_root: Path, data_dir: Path,
     ):
         run_ingestion(case_root, data_dir, run_id="e2e_test")
-        assert (data_dir / "docs.parquet").exists()
-        assert (data_dir / "chunks.parquet").exists()
+        out = get_ingestion_run_output_dir(data_dir, "e2e_test")
+        assert (out / "docs.parquet").exists()
+        assert (out / "chunks.parquet").exists()
 
     def test_chunks_parquet_schema_valid(self, case_root: Path, data_dir: Path):
         run_ingestion(case_root, data_dir, run_id="e2e_test")
-        table = pq.read_table(data_dir / "chunks.parquet")
+        table = pq.read_table(get_ingestion_run_output_dir(data_dir, "e2e_test") / "chunks.parquet")
         errors = validate(table, CHUNKS_SCHEMA)
         assert errors == []
 
     def test_chunks_parquet_contract_valid(self, case_root: Path, data_dir: Path):
         run_ingestion(case_root, data_dir, run_id="e2e_test")
-        table = pq.read_table(data_dir / "chunks.parquet")
+        table = pq.read_table(get_ingestion_run_output_dir(data_dir, "e2e_test") / "chunks.parquet")
         errors = validate_contract_rules(table, "chunks")
         assert errors == []
 
@@ -352,15 +354,16 @@ class TestRunIngestion:
         self, case_root: Path, data_dir: Path,
     ):
         run_ingestion(case_root, data_dir, run_id="e2e_test")
-        table = pq.read_table(data_dir / "docs.parquet")
+        table = pq.read_table(get_ingestion_run_output_dir(data_dir, "e2e_test") / "docs.parquet")
         errors = validate_contract_rules(table, "docs")
         assert errors == []
 
     def test_chunk_doc_ids_exist_in_docs(self, case_root: Path, data_dir: Path):
         """All chunk doc_id values must reference a doc in docs.parquet."""
         run_ingestion(case_root, data_dir, run_id="e2e_test")
-        docs = pq.read_table(data_dir / "docs.parquet").to_pylist()
-        chunks = pq.read_table(data_dir / "chunks.parquet").to_pylist()
+        out = get_ingestion_run_output_dir(data_dir, "e2e_test")
+        docs = pq.read_table(out / "docs.parquet").to_pylist()
+        chunks = pq.read_table(out / "chunks.parquet").to_pylist()
         doc_ids = {d["doc_id"] for d in docs}
         for c in chunks:
             assert c["doc_id"] in doc_ids
@@ -369,7 +372,7 @@ class TestRunIngestion:
         self, case_root: Path, data_dir: Path,
     ):
         run_ingestion(case_root, data_dir, run_id="e2e_test")
-        table = pq.read_table(data_dir / "chunks.parquet")
+        table = pq.read_table(get_ingestion_run_output_dir(data_dir, "e2e_test") / "chunks.parquet")
         for row in table.to_pylist():
             assert row["run_id"] == "e2e_test"
 
@@ -377,13 +380,13 @@ class TestRunIngestion:
         self, case_root: Path, data_dir: Path,
     ):
         run_ingestion(case_root, data_dir, run_id="e2e_test")
-        table = pq.read_table(data_dir / "chunks.parquet")
+        table = pq.read_table(get_ingestion_run_output_dir(data_dir, "e2e_test") / "chunks.parquet")
         for row in table.to_pylist():
             assert row["text"].strip() != ""
 
     def test_chunk_index_unique_per_doc(self, case_root: Path, data_dir: Path):
         run_ingestion(case_root, data_dir, run_id="e2e_test")
-        table = pq.read_table(data_dir / "chunks.parquet")
+        table = pq.read_table(get_ingestion_run_output_dir(data_dir, "e2e_test") / "chunks.parquet")
         seen: set[tuple[str, str, int]] = set()
         for row in table.to_pylist():
             key = (row["run_id"], row["doc_id"], row["chunk_index"])
@@ -392,7 +395,7 @@ class TestRunIngestion:
 
     def test_run_metadata_written(self, case_root: Path, data_dir: Path):
         run_ingestion(case_root, data_dir, run_id="e2e_test")
-        meta_path = data_dir / "run_metadata.json"
+        meta_path = get_ingestion_run_output_dir(data_dir, "e2e_test") / "run_metadata.json"
         assert meta_path.exists()
         meta = json.loads(meta_path.read_text())
         assert meta["run_id"] == "e2e_test"
@@ -402,7 +405,7 @@ class TestRunIngestion:
 
     def test_run_metadata_has_chunk_stats(self, case_root: Path, data_dir: Path):
         run_ingestion(case_root, data_dir, run_id="e2e_test")
-        meta = json.loads((data_dir / "run_metadata.json").read_text())
+        meta = json.loads((get_ingestion_run_output_dir(data_dir, "e2e_test") / "run_metadata.json").read_text())
         assert "chunks_per_doc_min" in meta
         assert "chunks_per_doc_max" in meta
         assert "chunks_per_doc_median" in meta
@@ -418,8 +421,8 @@ class TestRunIngestion:
         run_ingestion(case_root, dir1, run_id="det_test")
         run_ingestion(case_root, dir2, run_id="det_test")
 
-        chunks1 = pq.read_table(dir1 / "chunks.parquet").to_pylist()
-        chunks2 = pq.read_table(dir2 / "chunks.parquet").to_pylist()
+        chunks1 = pq.read_table(get_ingestion_run_output_dir(dir1, "det_test") / "chunks.parquet").to_pylist()
+        chunks2 = pq.read_table(get_ingestion_run_output_dir(dir2, "det_test") / "chunks.parquet").to_pylist()
 
         assert len(chunks1) == len(chunks2)
         for c1, c2 in zip(chunks1, chunks2):
@@ -447,11 +450,11 @@ class TestRunIngestion:
     ):
         """Re-running with the same run_id must not duplicate chunk rows."""
         run_ingestion(case_root, data_dir, run_id="rerun_test")
-        first = pq.read_table(data_dir / "chunks.parquet")
+        first = pq.read_table(get_ingestion_run_output_dir(data_dir, "rerun_test") / "chunks.parquet")
         first_count = len(first)
 
         run_ingestion(case_root, data_dir, run_id="rerun_test")
-        second = pq.read_table(data_dir / "chunks.parquet")
+        second = pq.read_table(get_ingestion_run_output_dir(data_dir, "rerun_test") / "chunks.parquet")
 
         assert len(second) == first_count, (
             f"Expected {first_count} chunks after rerun, got {len(second)}"
@@ -467,7 +470,7 @@ class TestRunIngestion:
             case_root, data_dir, run_id="compat_test"
         )
         assert run_id == "compat_test"
-        assert (data_dir / "docs.parquet").exists()
+        assert (get_ingestion_run_output_dir(data_dir, "compat_test") / "docs.parquet").exists()
 
     def test_existing_tests_still_work_extraction(
         self, case_root: Path, data_dir: Path,

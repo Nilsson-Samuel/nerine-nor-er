@@ -15,6 +15,7 @@ from src.shared.fixtures import (
     build_mock_entities,
     write_mock_handoff,
 )
+from src.shared.paths import get_blocking_run_output_dir, get_extraction_run_output_dir
 
 
 @pytest.fixture()
@@ -36,13 +37,17 @@ def test_load_embedding_artifacts_accepts_blocking_writer_output(tmp_path: Path)
     embeddings, context_embeddings, embedding_entity_ids = build_mock_embedding_artifacts(
         entities
     )
-    pq.write_table(entities, tmp_path / "entities.parquet")
+    extraction_dir = get_extraction_run_output_dir(tmp_path, DEFAULT_RUN_ID)
+    extraction_dir.mkdir(parents=True, exist_ok=True)
+    pq.write_table(entities, extraction_dir / "entities.parquet")
 
+    blocking_dir = get_blocking_run_output_dir(tmp_path, DEFAULT_RUN_ID)
+    blocking_dir.mkdir(parents=True, exist_ok=True)
     persist_embedding_artifacts(
         entity_ids=embedding_entity_ids.tolist(),
         embeddings=embeddings,
         context_embeddings=context_embeddings,
-        out_dir=tmp_path,
+        out_dir=blocking_dir,
     )
 
     artifacts = load_embedding_artifacts(tmp_path, DEFAULT_RUN_ID)
@@ -54,9 +59,10 @@ def test_load_embedding_artifacts_accepts_blocking_writer_output(tmp_path: Path)
 
 
 def test_load_embedding_artifacts_uses_per_run_entity_id_order(handoff_dir: Path) -> None:
-    entities = pq.read_table(handoff_dir / "entities.parquet")
+    extraction_dir = get_extraction_run_output_dir(handoff_dir, DEFAULT_RUN_ID)
+    entities = pq.read_table(extraction_dir / "entities.parquet")
     reversed_entities = entities.take(pa.array([3, 2, 1, 0]))
-    pq.write_table(reversed_entities, handoff_dir / "entities.parquet")
+    pq.write_table(reversed_entities, extraction_dir / "entities.parquet")
 
     artifacts = load_embedding_artifacts(handoff_dir, DEFAULT_RUN_ID)
 
@@ -65,35 +71,39 @@ def test_load_embedding_artifacts_uses_per_run_entity_id_order(handoff_dir: Path
 
 
 def test_load_embedding_artifacts_rejects_row_count_mismatch(handoff_dir: Path) -> None:
-    context_embeddings = np.load(handoff_dir / "context_embeddings.npy", allow_pickle=False)
-    np.save(handoff_dir / "context_embeddings.npy", context_embeddings[:-1])
+    blocking_dir = get_blocking_run_output_dir(handoff_dir, DEFAULT_RUN_ID)
+    context_embeddings = np.load(blocking_dir / "context_embeddings.npy", allow_pickle=False)
+    np.save(blocking_dir / "context_embeddings.npy", context_embeddings[:-1])
 
     with pytest.raises(ValueError, match="row count"):
         load_embedding_artifacts(handoff_dir, DEFAULT_RUN_ID)
 
 
 def test_load_embedding_artifacts_rejects_wrong_dim(handoff_dir: Path) -> None:
-    embeddings = np.load(handoff_dir / "embeddings.npy", allow_pickle=False)
-    np.save(handoff_dir / "embeddings.npy", embeddings[:, :-1])
+    blocking_dir = get_blocking_run_output_dir(handoff_dir, DEFAULT_RUN_ID)
+    embeddings = np.load(blocking_dir / "embeddings.npy", allow_pickle=False)
+    np.save(blocking_dir / "embeddings.npy", embeddings[:, :-1])
 
     with pytest.raises(ValueError, match="dim mismatch"):
         load_embedding_artifacts(handoff_dir, DEFAULT_RUN_ID)
 
 
 def test_load_embedding_artifacts_rejects_mismatched_id_order(handoff_dir: Path) -> None:
-    embedding_entity_ids = np.load(handoff_dir / "embedding_entity_ids.npy", allow_pickle=False)
+    blocking_dir = get_blocking_run_output_dir(handoff_dir, DEFAULT_RUN_ID)
+    embedding_entity_ids = np.load(blocking_dir / "embedding_entity_ids.npy", allow_pickle=False)
     corrupted = embedding_entity_ids.copy()
     corrupted[[0, 1]] = corrupted[[1, 0]]
-    np.save(handoff_dir / "embedding_entity_ids.npy", corrupted)
+    np.save(blocking_dir / "embedding_entity_ids.npy", corrupted)
 
     with pytest.raises(ValueError, match="row order"):
         load_embedding_artifacts(handoff_dir, DEFAULT_RUN_ID)
 
 
 def test_load_embedding_artifacts_rejects_non_normalized_rows(handoff_dir: Path) -> None:
-    embeddings = np.load(handoff_dir / "embeddings.npy", allow_pickle=False)
+    blocking_dir = get_blocking_run_output_dir(handoff_dir, DEFAULT_RUN_ID)
+    embeddings = np.load(blocking_dir / "embeddings.npy", allow_pickle=False)
     embeddings[0] = embeddings[0] * 2.0
-    np.save(handoff_dir / "embeddings.npy", embeddings)
+    np.save(blocking_dir / "embeddings.npy", embeddings)
 
     with pytest.raises(ValueError, match="L2-normalized"):
         load_embedding_artifacts(handoff_dir, DEFAULT_RUN_ID)
@@ -111,7 +121,7 @@ def test_build_embedding_id_index_is_complete_and_stable(handoff_dir: Path) -> N
 
 
 def test_load_embedding_artifacts_rejects_unknown_run_id(handoff_dir: Path) -> None:
-    with pytest.raises(ValueError, match="run_id not found"):
+    with pytest.raises(FileNotFoundError):
         load_embedding_artifacts(handoff_dir, "missing_run")
 
 

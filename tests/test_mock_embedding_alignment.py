@@ -6,18 +6,21 @@ import numpy as np
 import pyarrow.parquet as pq
 import pytest
 
-from src.shared.fixtures import write_mock_handoff
+from src.shared.fixtures import DEFAULT_RUN_ID, write_mock_handoff
+from src.shared.paths import get_blocking_run_output_dir, get_extraction_run_output_dir
 from src.shared.validators import validate_embedding_alignment
 
 
 def test_embedding_alignment_happy_path(tmp_path: Path) -> None:
     write_mock_handoff(tmp_path)
-    entities = pq.read_table(tmp_path / "entities.parquet")
+    extraction_dir = get_extraction_run_output_dir(tmp_path, DEFAULT_RUN_ID)
+    blocking_dir = get_blocking_run_output_dir(tmp_path, DEFAULT_RUN_ID)
+    entities = pq.read_table(extraction_dir / "entities.parquet")
 
     validate_embedding_alignment(
-        embeddings=np.load(tmp_path / "embeddings.npy"),
-        context_embeddings=np.load(tmp_path / "context_embeddings.npy"),
-        embedding_entity_ids=np.load(tmp_path / "embedding_entity_ids.npy"),
+        embeddings=np.load(blocking_dir / "embeddings.npy"),
+        context_embeddings=np.load(blocking_dir / "context_embeddings.npy"),
+        embedding_entity_ids=np.load(blocking_dir / "embedding_entity_ids.npy"),
         entity_ids=entities.column("entity_id").to_pylist(),
     )
 

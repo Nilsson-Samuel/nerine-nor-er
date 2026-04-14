@@ -18,8 +18,9 @@ from src.hitl.queries import (
     load_cluster_frame_safe,
     size_distribution,
 )
-from src.matching.writer import _encode_run_id_path_segment
-from src.resolution.writer import CLUSTERS_FILENAME, RESOLUTION_STAGE_DIRNAME
+from src.shared.paths import _encode_run_id_path_segment
+from src.resolution.writer import CLUSTERS_FILENAME
+from src.shared.paths import RESOLUTION_STAGE_DIRNAME
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────

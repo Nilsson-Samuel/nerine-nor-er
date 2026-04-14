@@ -20,6 +20,7 @@ from src.resolution.writer import (
     get_resolved_entities_output_path,
 )
 from src.shared import schemas
+from src.shared.paths import get_extraction_run_output_dir
 
 
 def _hex32(number: int) -> str:
@@ -249,7 +250,9 @@ def test_run_resolution_writes_resolved_entities_and_clusters_json(tmp_path: Pat
             ],
         },
     ]
-    pq.write_table(_build_entities_table(run_id, entity_rows), tmp_path / "entities.parquet")
+    entities_path = get_extraction_run_output_dir(tmp_path, run_id) / "entities.parquet"
+    entities_path.parent.mkdir(parents=True, exist_ok=True)
+    pq.write_table(_build_entities_table(run_id, entity_rows), entities_path)
 
     scored_pairs_path = get_scored_pairs_output_path(tmp_path, run_id)
     scored_pairs_path.parent.mkdir(parents=True, exist_ok=True)
@@ -354,7 +357,9 @@ def test_run_resolution_defer_cluster_does_not_set_needs_review(tmp_path: Path) 
             }
         )
 
-    pq.write_table(_build_entities_table(run_id, entity_rows), tmp_path / "entities.parquet")
+    entities_path = get_extraction_run_output_dir(tmp_path, run_id) / "entities.parquet"
+    entities_path.parent.mkdir(parents=True, exist_ok=True)
+    pq.write_table(_build_entities_table(run_id, entity_rows), entities_path)
 
     scored_pairs_path = get_scored_pairs_output_path(tmp_path, run_id)
     scored_pairs_path.parent.mkdir(parents=True, exist_ok=True)

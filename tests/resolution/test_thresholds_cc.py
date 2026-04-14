@@ -25,6 +25,7 @@ from src.resolution.run import (
     run_resolution,
 )
 from src.shared import schemas
+from src.shared.paths import get_extraction_run_output_dir
 
 
 PAIR_COLUMNS = ["run_id", "entity_id_a", "entity_id_b", "score"]
@@ -209,9 +210,11 @@ def test_build_retained_graph_raises_for_unknown_entities_even_below_threshold()
 
 def test_run_resolution_writes_component_and_diagnostic_artifacts(tmp_path: Path) -> None:
     a, b, c, d, e = (_hex32(index) for index in range(1, 6))
+    entities_dir = get_extraction_run_output_dir(tmp_path, "run_resolution")
+    entities_dir.mkdir(parents=True, exist_ok=True)
     pq.write_table(
         _build_entities_table("run_resolution", [a, b, c, d, e]),
-        tmp_path / "entities.parquet",
+        entities_dir / "entities.parquet",
     )
     table = _build_scored_pairs_table(
         [
@@ -253,9 +256,11 @@ def test_run_resolution_logs_start_summary_and_finish(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     a, b, c, d, e = (_hex32(index) for index in range(1, 6))
+    entities_dir = get_extraction_run_output_dir(tmp_path, "run_resolution_logging")
+    entities_dir.mkdir(parents=True, exist_ok=True)
     pq.write_table(
         _build_entities_table("run_resolution_logging", [a, b, c, d, e]),
-        tmp_path / "entities.parquet",
+        entities_dir / "entities.parquet",
     )
     scored_pairs_path = get_scored_pairs_output_path(tmp_path, "run_resolution_logging")
     scored_pairs_path.parent.mkdir(parents=True, exist_ok=True)
@@ -289,9 +294,11 @@ def test_run_resolution_logs_start_summary_and_finish(
 
 def test_run_resolution_raises_for_missing_run_id(tmp_path: Path) -> None:
     a, b = (_hex32(index) for index in range(1, 3))
+    entities_dir = get_extraction_run_output_dir(tmp_path, "run_resolution")
+    entities_dir.mkdir(parents=True, exist_ok=True)
     pq.write_table(
         _build_entities_table("run_resolution", [a, b]),
-        tmp_path / "entities.parquet",
+        entities_dir / "entities.parquet",
     )
     scored_pairs_path = get_scored_pairs_output_path(tmp_path, "run_resolution")
     scored_pairs_path.parent.mkdir(parents=True, exist_ok=True)
@@ -300,6 +307,13 @@ def test_run_resolution_raises_for_missing_run_id(tmp_path: Path) -> None:
         scored_pairs_path,
     )
 
+    # run_missing has an entities.parquet but with a different run_id in the data
+    entities_dir_missing = get_extraction_run_output_dir(tmp_path, "run_missing")
+    entities_dir_missing.mkdir(parents=True, exist_ok=True)
+    pq.write_table(
+        _build_entities_table("run_resolution", [a, b]),
+        entities_dir_missing / "entities.parquet",
+    )
     with pytest.raises(ValueError, match="run_id not found in entities.parquet"):
         run_resolution(tmp_path, "run_missing")
 

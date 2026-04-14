@@ -21,6 +21,7 @@ import pytest
 
 from src.extraction.context import extract_context
 from src.extraction.writer import make_entity_id, write_entities_parquet
+from src.shared.paths import get_extraction_run_output_dir, get_ingestion_run_output_dir
 from src.shared.schemas import (
     CHUNKS_SCHEMA,
     ENTITIES_SCHEMA,
@@ -271,7 +272,9 @@ def _write_synthetic_chunks(data_dir: Path, run_id: str, con: duckdb.DuckDBPyCon
         for field in CHUNKS_SCHEMA:
             arrays[field.name].append(row[field.name])
     table = pa.table(arrays, schema=CHUNKS_SCHEMA)
-    chunks_path = data_dir / "chunks.parquet"
+    ingestion_dir = get_ingestion_run_output_dir(data_dir, run_id)
+    ingestion_dir.mkdir(parents=True, exist_ok=True)
+    chunks_path = ingestion_dir / "chunks.parquet"
     pq.write_table(table, chunks_path)
     con.execute(f"CREATE OR REPLACE TABLE chunks AS SELECT * FROM '{chunks_path}'")
     return chunk_text
@@ -289,14 +292,16 @@ class TestFullPipeline:
         run_id = "integrationtest"
         _write_synthetic_chunks(data_dir, run_id, con)
         run_extraction(data_dir, run_id, con)
-        assert (data_dir / "entities.parquet").exists()
+        entities_path = get_extraction_run_output_dir(data_dir, run_id) / "entities.parquet"
+        assert entities_path.exists()
 
     def test_entities_schema_valid(self, data_dir, con):
         from src.extraction.run import run_extraction
         run_id = "integrationtest"
         _write_synthetic_chunks(data_dir, run_id, con)
         run_extraction(data_dir, run_id, con)
-        table = pq.read_table(data_dir / "entities.parquet")
+        entities_path = get_extraction_run_output_dir(data_dir, run_id) / "entities.parquet"
+        table = pq.read_table(entities_path)
         errors = validate(table, ENTITIES_SCHEMA)
         assert errors == [], errors
 
@@ -305,7 +310,8 @@ class TestFullPipeline:
         run_id = "integrationtest"
         _write_synthetic_chunks(data_dir, run_id, con)
         run_extraction(data_dir, run_id, con)
-        table = pq.read_table(data_dir / "entities.parquet")
+        entities_path = get_extraction_run_output_dir(data_dir, run_id) / "entities.parquet"
+        table = pq.read_table(entities_path)
         errors = validate_contract_rules(table, "entities")
         assert errors == [], errors
 
@@ -314,7 +320,8 @@ class TestFullPipeline:
         run_id = "integrationtest"
         _write_synthetic_chunks(data_dir, run_id, con)
         run_extraction(data_dir, run_id, con)
-        table = pq.read_table(data_dir / "entities.parquet")
+        entities_path = get_extraction_run_output_dir(data_dir, run_id) / "entities.parquet"
+        table = pq.read_table(entities_path)
         for row in table.to_pylist():
             assert row["context"], f"Empty context for entity {row['entity_id']}"
 
@@ -323,7 +330,8 @@ class TestFullPipeline:
         run_id = "integrationtest"
         _write_synthetic_chunks(data_dir, run_id, con)
         run_extraction(data_dir, run_id, con)
-        table = pq.read_table(data_dir / "entities.parquet")
+        entities_path = get_extraction_run_output_dir(data_dir, run_id) / "entities.parquet"
+        table = pq.read_table(entities_path)
         for row in table.to_pylist():
             positions = row["positions"]
             assert any(
@@ -338,7 +346,8 @@ class TestFullPipeline:
         run_id = "integrationtest"
         _write_synthetic_chunks(data_dir, run_id, con)
         run_extraction(data_dir, run_id, con)
-        table = pq.read_table(data_dir / "entities.parquet")
+        entities_path = get_extraction_run_output_dir(data_dir, run_id) / "entities.parquet"
+        table = pq.read_table(entities_path)
         for row in table.to_pylist():
             assert row["count"] == len(row["positions"])
 
@@ -354,7 +363,8 @@ class TestFullPipeline:
         from src.extraction.run import run_extraction
         result = run_extraction(data_dir, "emptyrun", con)
         assert result == "emptyrun"
-        assert not (data_dir / "entities.parquet").exists()
+        entities_path = get_extraction_run_output_dir(data_dir, "emptyrun") / "entities.parquet"
+        assert not entities_path.exists()
 
     def test_returns_run_id(self, data_dir, con):
         from src.extraction.run import run_extraction
@@ -374,7 +384,7 @@ class TestFullPipeline:
         con1 = duckdb.connect()
         _write_synthetic_chunks(dir1, run_id, con1)
         run_extraction(dir1, run_id, con1)
-        t1 = pq.read_table(dir1 / "entities.parquet")
+        t1 = pq.read_table(get_extraction_run_output_dir(dir1, run_id) / "entities.parquet")
 
         # Second run
         dir2 = data_dir / "run2"
@@ -382,7 +392,7 @@ class TestFullPipeline:
         con2 = duckdb.connect()
         _write_synthetic_chunks(dir2, run_id, con2)
         run_extraction(dir2, run_id, con2)
-        t2 = pq.read_table(dir2 / "entities.parquet")
+        t2 = pq.read_table(get_extraction_run_output_dir(dir2, run_id) / "entities.parquet")
 
         ids1 = sorted(t1.column("entity_id").to_pylist())
         ids2 = sorted(t2.column("entity_id").to_pylist())

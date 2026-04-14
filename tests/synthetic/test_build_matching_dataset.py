@@ -10,10 +10,13 @@ import pyarrow.parquet as pq
 import pytest
 
 from src.shared import schemas
+from src.shared.paths import get_blocking_run_output_dir, get_extraction_run_output_dir
 from src.synthetic.build_matching_dataset import (
     build_matching_dataset,
     validate_identity_groups_payload,
 )
+
+_RUN_ID = "synthetic_run_test_001"
 
 
 def _variant_triplet(
@@ -200,8 +203,8 @@ def test_build_matching_dataset_outputs_contract_valid_parquet(tmp_path: Path) -
 
     build_matching_dataset(identity_path, out_dir, max_pairs=2500, seed=11)
 
-    entities = pq.read_table(out_dir / "entities.parquet")
-    candidates = pq.read_table(out_dir / "candidate_pairs.parquet")
+    entities = pq.read_table(get_extraction_run_output_dir(out_dir, _RUN_ID) / "entities.parquet")
+    candidates = pq.read_table(get_blocking_run_output_dir(out_dir, _RUN_ID) / "candidate_pairs.parquet")
     labels = pq.read_table(out_dir / "labels.parquet")
 
     assert schemas.validate_contract_rules(entities, "entities") == []
@@ -229,8 +232,9 @@ def test_embeddings_are_l2_normalized(tmp_path: Path) -> None:
 
     build_matching_dataset(identity_path, out_dir, max_pairs=2500, seed=11)
 
-    embeddings = np.load(out_dir / "embeddings.npy", allow_pickle=False)
-    context_embeddings = np.load(out_dir / "context_embeddings.npy", allow_pickle=False)
+    blocking_dir = get_blocking_run_output_dir(out_dir, _RUN_ID)
+    embeddings = np.load(blocking_dir / "embeddings.npy", allow_pickle=False)
+    context_embeddings = np.load(blocking_dir / "context_embeddings.npy", allow_pickle=False)
 
     assert np.allclose(np.linalg.norm(embeddings, axis=1), 1.0, atol=1e-3)
     assert np.allclose(np.linalg.norm(context_embeddings, axis=1), 1.0, atol=1e-3)
@@ -243,9 +247,10 @@ def test_same_identity_pairs_have_high_cosine_similarity(tmp_path: Path) -> None
 
     build_matching_dataset(identity_path, out_dir, max_pairs=2500, seed=11)
 
+    blocking_dir = get_blocking_run_output_dir(out_dir, _RUN_ID)
     labels = pq.read_table(out_dir / "labels.parquet").to_pylist()
-    embeddings = np.load(out_dir / "embeddings.npy", allow_pickle=False)
-    entity_ids = np.load(out_dir / "embedding_entity_ids.npy", allow_pickle=False)
+    embeddings = np.load(blocking_dir / "embeddings.npy", allow_pickle=False)
+    entity_ids = np.load(blocking_dir / "embedding_entity_ids.npy", allow_pickle=False)
     id_to_idx = {entity_id: i for i, entity_id in enumerate(entity_ids.tolist())}
 
     positives = []
@@ -270,9 +275,10 @@ def test_different_identity_pairs_have_low_average_cosine_similarity(tmp_path: P
 
     build_matching_dataset(identity_path, out_dir, max_pairs=2500, seed=11)
 
+    blocking_dir = get_blocking_run_output_dir(out_dir, _RUN_ID)
     labels = pq.read_table(out_dir / "labels.parquet").to_pylist()
-    embeddings = np.load(out_dir / "embeddings.npy", allow_pickle=False)
-    entity_ids = np.load(out_dir / "embedding_entity_ids.npy", allow_pickle=False)
+    embeddings = np.load(blocking_dir / "embeddings.npy", allow_pickle=False)
+    entity_ids = np.load(blocking_dir / "embedding_entity_ids.npy", allow_pickle=False)
     id_to_idx = {entity_id: i for i, entity_id in enumerate(entity_ids.tolist())}
 
     negatives = []
@@ -299,15 +305,20 @@ def test_same_seed_produces_byte_identical_artifacts(tmp_path: Path) -> None:
     build_matching_dataset(identity_path, out_dir_a, max_pairs=2500, seed=11)
     build_matching_dataset(identity_path, out_dir_b, max_pairs=2500, seed=11)
 
+    ext_a = get_extraction_run_output_dir(out_dir_a, _RUN_ID)
+    ext_b = get_extraction_run_output_dir(out_dir_b, _RUN_ID)
+    blk_a = get_blocking_run_output_dir(out_dir_a, _RUN_ID)
+    blk_b = get_blocking_run_output_dir(out_dir_b, _RUN_ID)
+
+    assert (ext_a / "entities.parquet").read_bytes() == (ext_b / "entities.parquet").read_bytes()
+    assert (out_dir_a / "labels.parquet").read_bytes() == (out_dir_b / "labels.parquet").read_bytes()
     for file_name in (
-        "entities.parquet",
         "candidate_pairs.parquet",
-        "labels.parquet",
         "embeddings.npy",
         "context_embeddings.npy",
         "embedding_entity_ids.npy",
     ):
-        assert (out_dir_a / file_name).read_bytes() == (out_dir_b / file_name).read_bytes()
+        assert (blk_a / file_name).read_bytes() == (blk_b / file_name).read_bytes()
 
 
 def test_build_matching_dataset_accepts_org_and_fin_types(tmp_path: Path) -> None:
@@ -316,7 +327,7 @@ def test_build_matching_dataset_accepts_org_and_fin_types(tmp_path: Path) -> Non
     _write_identity_groups_with_org_fin_json(identity_path)
 
     build_matching_dataset(identity_path, out_dir, max_pairs=2500, seed=11)
-    entities = pq.read_table(out_dir / "entities.parquet")
+    entities = pq.read_table(get_extraction_run_output_dir(out_dir, _RUN_ID) / "entities.parquet")
     entity_types = set(entities.column("type").to_pylist())
 
     assert "ORG" in entity_types

@@ -24,6 +24,7 @@ from src.ingestion.run import (
     run_discovery_and_registration,
     run_extraction_and_normalization,
 )
+from src.shared.paths import get_ingestion_run_output_dir
 
 
 # ---------------------------------------------------------------------------
@@ -292,7 +293,7 @@ class TestRunExtractionAndNormalization:
         run_id = self._setup_run(case_with_real_files, data_dir)
         run_extraction_and_normalization(case_with_real_files, data_dir, run_id)
 
-        table = pq.read_table(data_dir / "docs.parquet")
+        table = pq.read_table(get_ingestion_run_output_dir(data_dir, run_id) / "docs.parquet")
         for row in table.to_pylist():
             assert row["page_count"] is not None
             assert row["page_count"] > 0
@@ -305,7 +306,7 @@ class TestRunExtractionAndNormalization:
             case_with_real_files, data_dir, run_id
         )
 
-        table = pq.read_table(data_dir / "docs.parquet")
+        table = pq.read_table(get_ingestion_run_output_dir(data_dir, run_id) / "docs.parquet")
         for row in table.to_pylist():
             doc_id = row["doc_id"]
             assert row["page_count"] == len(result[doc_id])
@@ -319,7 +320,7 @@ class TestRunExtractionAndNormalization:
         run_id = self._setup_run(case_with_real_files, data_dir)
         run_extraction_and_normalization(case_with_real_files, data_dir, run_id)
 
-        table = pq.read_table(data_dir / "docs.parquet")
+        table = pq.read_table(get_ingestion_run_output_dir(data_dir, run_id) / "docs.parquet")
         errors = validate_contract_rules(table, "docs")
         assert errors == []
 
@@ -368,7 +369,7 @@ class TestRunExtractionAndNormalization:
         original_doc_id = list(result1.keys())[0]
 
         # Verify page_count is 1 after first extraction
-        table1 = pq.read_table(data_dir / "docs.parquet")
+        table1 = pq.read_table(get_ingestion_run_output_dir(data_dir, run_id) / "docs.parquet")
         row1 = table1.to_pylist()[0]
         assert row1["page_count"] == 1
         assert row1["doc_id"] == original_doc_id
@@ -388,7 +389,7 @@ class TestRunExtractionAndNormalization:
         assert original_doc_id not in result2
 
         # docs.parquet must still show the original page_count
-        table2 = pq.read_table(data_dir / "docs.parquet")
+        table2 = pq.read_table(get_ingestion_run_output_dir(data_dir, run_id) / "docs.parquet")
         row2 = table2.to_pylist()[0]
         assert row2["doc_id"] == original_doc_id
         assert row2["page_count"] == 1  # NOT 3

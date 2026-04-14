@@ -17,11 +17,10 @@ from src.hitl.queries import (
     load_cluster_member_ids,
     load_cluster_members,
 )
-from src.matching.writer import (
-    _encode_run_id_path_segment,
-    get_matching_run_output_dir,
-)
+from src.matching.writer import get_matching_run_output_dir
+from src.shared.paths import _encode_run_id_path_segment
 from src.resolution.writer import get_resolution_run_output_dir
+from src.shared.paths import get_extraction_run_output_dir
 from src.shared.schemas import (
     ENTITIES_SCHEMA,
     RESOLVED_ENTITIES_SCHEMA,
@@ -195,8 +194,10 @@ def _build_scored_pairs_table() -> pa.Table:
 @pytest.fixture()
 def inspector_data_dir(tmp_path: Path) -> Path:
     """Write all three parquet artifacts needed for the inspector."""
-    # entities.parquet at root level
-    pq.write_table(_build_entities_table(), tmp_path / "entities.parquet")
+    # entities.parquet in per-run extraction dir
+    extraction_dir = get_extraction_run_output_dir(tmp_path, RUN_ID)
+    extraction_dir.mkdir(parents=True, exist_ok=True)
+    pq.write_table(_build_entities_table(), extraction_dir / "entities.parquet")
 
     # resolved_entities.parquet in per-run resolution dir
     resolution_dir = get_resolution_run_output_dir(tmp_path, RUN_ID)
@@ -277,9 +278,11 @@ def test_load_cluster_members_empty_for_missing_files(tmp_path: Path) -> None:
 def test_load_cluster_members_tolerates_missing_optional_columns(
     tmp_path: Path,
 ) -> None:
+    extraction_dir = get_extraction_run_output_dir(tmp_path, RUN_ID)
+    extraction_dir.mkdir(parents=True, exist_ok=True)
     pq.write_table(
         _build_entities_table().drop_columns(["context", "char_end"]),
-        tmp_path / "entities.parquet",
+        extraction_dir / "entities.parquet",
     )
 
     resolution_dir = get_resolution_run_output_dir(tmp_path, RUN_ID)
