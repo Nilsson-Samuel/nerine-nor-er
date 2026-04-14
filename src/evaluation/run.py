@@ -109,6 +109,111 @@ def get_evaluation_labels_path(data_dir: Path | str, run_id: str) -> Path:
     return get_evaluation_run_output_dir(data_dir, run_id) / LABELS_FILENAME
 
 
+def _prepare_gold_label_bridge(
+    data_dir: Path,
+    run_id: str,
+    gold_path: Path,
+) -> dict[str, Any]:
+    """Build gold-bridge artifacts once for label writing and full evaluation."""
+    docs = _load_docs(data_dir, run_id)
+    chunks = _attach_chunk_global_offsets(_load_chunks(data_dir, run_id), docs)
+    gold_mentions, gold_offset_summary = _remap_gold_offsets_to_run_text(
+        _remap_gold_doc_ids(_load_gold_mentions(gold_path), docs),
+        chunks,
+    )
+    trusted_gold_mentions = (
+        gold_mentions.filter(pl.col("_offset_resolved"))
+        .drop("_offset_resolved")
+        .sort(["doc_id", "char_start", "char_end", "mention_id"])
+    )
+    entities = _load_entities(data_dir, run_id)
+    candidate_pairs = _load_candidate_pairs(data_dir, run_id)
+    predicted_mentions = _build_predicted_mentions(entities, chunks)
+    matched_mentions = _match_gold_to_predicted(
+        trusted_gold_mentions,
+        predicted_mentions,
+    )
+    gold_group_by_entity, bridge_summary = _assign_gold_groups(
+        entities,
+        matched_mentions,
+    )
+    bridge_summary["gold_mentions"] = gold_mentions.height
+    bridge_summary["trusted_gold_mentions"] = trusted_gold_mentions.height
+    bridge_summary.update(gold_offset_summary)
+    bridge_summary["matched_mention_rate"] = (
+        matched_mentions.height / trusted_gold_mentions.height
+        if trusted_gold_mentions.height
+        else 0.0
+    )
+    bridge_summary["matched_mentions_by_method"] = {
+        str(row["match_method"]): int(row["count"])
+        for row in matched_mentions.group_by("match_method")
+        .len()
+        .rename({"len": "count"})
+        .iter_rows(named=True)
+    }
+
+    entity_doc_id_by_entity = {
+        str(row["entity_id"]): str(row["doc_id"])
+        for row in entities.select(["entity_id", "doc_id"]).iter_rows(named=True)
+    }
+    labels_table = _build_labels_table(candidate_pairs, gold_group_by_entity)
+    bridge_summary["label_rows_written"] = labels_table.num_rows
+    bridge_summary["candidate_pairs_excluded_from_labels"] = (
+        candidate_pairs.height - labels_table.num_rows
+    )
+    return {
+        "chunks": chunks,
+        "gold_mentions": gold_mentions,
+        "trusted_gold_mentions": trusted_gold_mentions,
+        "entities": entities,
+        "candidate_pairs": candidate_pairs,
+        "predicted_mentions": predicted_mentions,
+        "gold_group_by_entity": gold_group_by_entity,
+        "entity_doc_id_by_entity": entity_doc_id_by_entity,
+        "labels_table": labels_table,
+        "bridge_summary": bridge_summary,
+    }
+
+
+def write_training_labels_from_gold(
+    data_dir: Path | str,
+    run_id: str,
+    gold_path: Path | str,
+    *,
+    shared_labels_path: Path | str | None = None,
+    shared_labels_allowed_doc_ids: Sequence[str] | None = None,
+) -> dict[str, Any]:
+    """Write one run's gold-bridge labels without requiring scoring outputs."""
+    data_dir = Path(data_dir)
+    gold_path = Path(gold_path)
+    labels_path = get_evaluation_labels_path(data_dir, run_id)
+    bridge = _prepare_gold_label_bridge(data_dir, run_id, gold_path)
+
+    _write_parquet_atomic(bridge["labels_table"], labels_path)
+    if shared_labels_path is not None:
+        shared_labels_table = _build_labels_table(
+            bridge["candidate_pairs"],
+            bridge["gold_group_by_entity"],
+            entity_doc_id_by_entity=bridge["entity_doc_id_by_entity"],
+            allowed_doc_ids=shared_labels_allowed_doc_ids,
+        )
+        _merge_labels_into_shared_store(
+            shared_labels_table,
+            Path(shared_labels_path),
+            run_id,
+        )
+
+    return {
+        "run_id": run_id,
+        "gold_path": str(gold_path.resolve()),
+        "labels_path": str(labels_path),
+        "label_rows_written": int(bridge["labels_table"].num_rows),
+        "candidate_pair_count": int(bridge["candidate_pairs"].height),
+        "bridge_summary": dict(bridge["bridge_summary"]),
+    }
+
+
 def run_evaluation(
     data_dir: Path | str,
     run_id: str,
@@ -126,57 +231,22 @@ def run_evaluation(
     data_dir = Path(data_dir)
     gold_path = Path(gold_path)
     report_path = get_evaluation_report_path(data_dir, run_id)
+    bridge = _prepare_gold_label_bridge(data_dir, run_id, gold_path)
     labels_path = get_evaluation_labels_path(data_dir, run_id)
 
-    docs = _load_docs(data_dir, run_id)
-    chunks = _attach_chunk_global_offsets(_load_chunks(data_dir, run_id), docs)
-    gold_mentions, gold_offset_summary = _remap_gold_offsets_to_run_text(
-        _remap_gold_doc_ids(_load_gold_mentions(gold_path), docs),
-        chunks,
-    )
-    trusted_gold_mentions = (
-        gold_mentions.filter(pl.col("_offset_resolved"))
-        .drop("_offset_resolved")
-        .sort(["doc_id", "char_start", "char_end", "mention_id"])
-    )
-    entities = _load_entities(data_dir, run_id)
-    candidate_pairs = _load_candidate_pairs(data_dir, run_id)
+    chunks = bridge["chunks"]
+    gold_mentions = bridge["gold_mentions"]
+    trusted_gold_mentions = bridge["trusted_gold_mentions"]
+    entities = bridge["entities"]
+    candidate_pairs = bridge["candidate_pairs"]
     scored_pairs = _load_scored_pairs(data_dir, run_id)
     resolved_entities = _load_resolved_entities(data_dir, run_id)
+    predicted_mentions = bridge["predicted_mentions"]
+    gold_group_by_entity = bridge["gold_group_by_entity"]
+    bridge_summary = dict(bridge["bridge_summary"])
+    entity_doc_id_by_entity = bridge["entity_doc_id_by_entity"]
+    labels_table = bridge["labels_table"]
 
-    predicted_mentions = _build_predicted_mentions(entities, chunks)
-    matched_mentions = _match_gold_to_predicted(
-        trusted_gold_mentions, predicted_mentions
-    )
-    gold_group_by_entity, bridge_summary = _assign_gold_groups(
-        entities, matched_mentions
-    )
-    bridge_summary["gold_mentions"] = gold_mentions.height
-    bridge_summary["trusted_gold_mentions"] = trusted_gold_mentions.height
-    bridge_summary.update(gold_offset_summary)
-    bridge_summary["matched_mention_rate"] = (
-        matched_mentions.height / trusted_gold_mentions.height
-        if trusted_gold_mentions.height
-        else 0.0
-    )
-    match_method_counts = {
-        str(row["match_method"]): int(row["count"])
-        for row in matched_mentions.group_by("match_method")
-        .len()
-        .rename({"len": "count"})
-        .iter_rows(named=True)
-    }
-    bridge_summary["matched_mentions_by_method"] = match_method_counts
-
-    entity_doc_id_by_entity = {
-        str(row["entity_id"]): str(row["doc_id"])
-        for row in entities.select(["entity_id", "doc_id"]).iter_rows(named=True)
-    }
-    labels_table = _build_labels_table(candidate_pairs, gold_group_by_entity)
-    bridge_summary["label_rows_written"] = labels_table.num_rows
-    bridge_summary["candidate_pairs_excluded_from_labels"] = (
-        candidate_pairs.height - labels_table.num_rows
-    )
     _write_parquet_atomic(labels_table, labels_path)
     if shared_labels_path is not None:
         shared_labels_table = _build_labels_table(

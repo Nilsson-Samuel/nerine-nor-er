@@ -23,6 +23,7 @@ from src.evaluation.run import (
     get_evaluation_labels_path,
     get_evaluation_report_path,
     run_evaluation,
+    write_training_labels_from_gold,
 )
 from src.matching.writer import (
     get_matching_run_output_dir,
@@ -860,6 +861,35 @@ def test_run_evaluation_filters_shared_training_labels_by_allowed_doc_ids(
     assert shared_labels[0]["entity_id_a"] == _hex32(21)
     assert shared_labels[0]["entity_id_b"] == _hex32(22)
     assert shared_labels[0]["label"] == 0
+
+
+def test_write_training_labels_from_gold_does_not_require_scored_or_resolved_outputs(
+    tmp_path: Path,
+) -> None:
+    run_id = "eval_run_label_only_001"
+    data_dir = _write_case_artifacts(tmp_path, run_id)
+    gold_path = tmp_path / "gold_annotations.csv"
+    shared_labels_path = tmp_path / "shared_labels.parquet"
+    _write_gold_csv(gold_path)
+
+    get_scored_pairs_output_path(data_dir, run_id).unlink()
+    get_resolved_entities_output_path(data_dir, run_id).unlink()
+
+    result = write_training_labels_from_gold(
+        data_dir=data_dir,
+        run_id=run_id,
+        gold_path=gold_path,
+        shared_labels_path=shared_labels_path,
+    )
+
+    labels = pq.read_table(get_evaluation_labels_path(data_dir, run_id)).to_pylist()
+    shared_labels = pq.read_table(shared_labels_path).to_pylist()
+
+    assert result["label_rows_written"] == 6
+    assert result["candidate_pair_count"] == 6
+    assert result["bridge_summary"]["matched_gold_mentions"] == 4
+    assert len(labels) == 6
+    assert labels == shared_labels
 
 
 def test_run_evaluation_realigns_gold_offsets_before_scoring(tmp_path: Path) -> None:
