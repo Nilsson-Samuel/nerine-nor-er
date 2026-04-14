@@ -35,12 +35,13 @@ from src.matching.writer import (
 )
 from src.resolution.writer import get_resolved_entities_output_path
 from src.shared import schemas
+from src.shared.config import PAIR_MATCH_THRESHOLD
 from src.synthetic.build_matching_dataset import LABELS_SCHEMA
 
 EVALUATION_STAGE_DIRNAME = "evaluation"
 EVALUATION_REPORT_FILENAME = "evaluation_report.json"
 LABELS_FILENAME = "labels.parquet"
-DEFAULT_MATCH_THRESHOLD = 0.5
+DEFAULT_MATCH_THRESHOLD = PAIR_MATCH_THRESHOLD
 DEFAULT_ALLOWED_METRIC_DROP = {
     "pairwise_f1": 0.03,
     "bcubed_f1": 0.03,

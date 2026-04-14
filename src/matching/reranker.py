@@ -13,12 +13,14 @@ import polars as pl
 from lightgbm import Booster, LGBMClassifier
 from sklearn.metrics import average_precision_score, fbeta_score, precision_score, recall_score
 
+from src.shared.config import PAIR_MATCH_THRESHOLD
+
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_LIGHTGBM_SEED = 7
 DEFAULT_MATCH_F_BETA = 0.5
-DEFAULT_MATCH_THRESHOLD = 0.5
+DEFAULT_MATCH_THRESHOLD = PAIR_MATCH_THRESHOLD
 DEFAULT_MODEL_VERSION = "lightgbm_baseline"
 MODEL_FILENAME = "reranker_model.txt"
 MODEL_METADATA_FILENAME = "reranker_model_metadata.json"
