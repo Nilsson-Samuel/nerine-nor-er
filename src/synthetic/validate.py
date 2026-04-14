@@ -10,6 +10,7 @@ import numpy as np
 import pyarrow.parquet as pq
 
 from src.shared import schemas
+from src.shared.paths import get_blocking_run_output_dir, get_extraction_run_output_dir
 from src.shared.validators import (
     is_hex32,
     is_lower_trimmed_non_empty,
@@ -158,12 +159,23 @@ def _validate_pair_entity_references(
     return errors
 
 
-def validate_synthetic_data(data_dir: Path | str) -> list[str]:
+def validate_synthetic_data(data_dir: Path | str, run_id: str | None = None) -> list[str]:
     """Validate synthetic matching artifacts and return any discovered issues."""
     data_dir = Path(data_dir)
     issues: list[str] = []
 
-    entities_table, entity_read_errors = _read_table(data_dir / "entities.parquet")
+    if run_id is None:
+        # Auto-detect run_id from labels.parquet (always at root)
+        labels_table_peek, _ = _read_table(data_dir / "labels.parquet")
+        if labels_table_peek is not None and labels_table_peek.num_rows > 0:
+            run_id = labels_table_peek.column("run_id")[0].as_py()
+        else:
+            return ["cannot auto-detect run_id: labels.parquet missing or empty"]
+
+    extraction_dir = get_extraction_run_output_dir(data_dir, run_id)
+    blocking_dir = get_blocking_run_output_dir(data_dir, run_id)
+
+    entities_table, entity_read_errors = _read_table(extraction_dir / "entities.parquet")
     issues.extend(entity_read_errors)
     entities_schema_ok = False
     if entities_table is not None:
@@ -181,7 +193,7 @@ def validate_synthetic_data(data_dir: Path | str) -> list[str]:
             )
         )
 
-    candidate_table, candidate_read_errors = _read_table(data_dir / "candidate_pairs.parquet")
+    candidate_table, candidate_read_errors = _read_table(blocking_dir / "candidate_pairs.parquet")
     issues.extend(candidate_read_errors)
     candidate_schema_ok = False
     if candidate_table is not None:
@@ -210,7 +222,7 @@ def validate_synthetic_data(data_dir: Path | str) -> list[str]:
 
     if entities_table is not None and entities_schema_ok:
         entity_ids = entities_table.column("entity_id").to_pylist()
-        issues.extend(_validate_embedding_files(data_dir, entity_ids))
+        issues.extend(_validate_embedding_files(blocking_dir, entity_ids))
         entity_keys = set(
             zip(
                 entities_table.column("run_id").to_pylist(),
@@ -236,7 +248,7 @@ def validate_synthetic_data(data_dir: Path | str) -> list[str]:
             )
     else:
         missing_embeddings = [
-            file_name for file_name in EMBEDDING_FILES if not (data_dir / file_name).exists()
+            file_name for file_name in EMBEDDING_FILES if not (blocking_dir / file_name).exists()
         ]
         issues.extend([f"missing file: {file_name}" for file_name in missing_embeddings])
 
@@ -264,6 +276,7 @@ def _build_cli_parser() -> argparse.ArgumentParser:
     """Create CLI parser for synthetic artifact validation."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("data_dir", type=Path)
+    parser.add_argument("--run-id", type=str, default=None)
     return parser
 
 
@@ -272,7 +285,7 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     parser = _build_cli_parser()
     args = parser.parse_args()
-    issues = validate_synthetic_data(args.data_dir)
+    issues = validate_synthetic_data(args.data_dir, run_id=args.run_id)
     if issues:
         for issue in issues:
             print(issue)
