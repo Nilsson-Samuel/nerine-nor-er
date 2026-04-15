@@ -101,9 +101,11 @@ def _execute_pairs_query(
         return pl.from_arrow(table)
 
     data_dir = Path(db_path_or_con)
+    entities_path = get_extraction_run_output_dir(data_dir, run_id) / "entities.parquet"
+    candidate_pairs_path = get_blocking_run_output_dir(data_dir, run_id) / "candidate_pairs.parquet"
+    if not entities_path.exists() or not candidate_pairs_path.exists():
+        return pl.DataFrame(schema={"run_id": pl.Utf8, "entity_id_a": pl.Utf8, "entity_id_b": pl.Utf8, "name_a": pl.Utf8, "name_b": pl.Utf8})
     with duckdb.connect() as con:
-        entities_path = get_extraction_run_output_dir(data_dir, run_id) / "entities.parquet"
-        candidate_pairs_path = get_blocking_run_output_dir(data_dir, run_id) / "candidate_pairs.parquet"
         con.register("entities", con.read_parquet(str(entities_path)))
         con.register(
             "candidate_pairs",
