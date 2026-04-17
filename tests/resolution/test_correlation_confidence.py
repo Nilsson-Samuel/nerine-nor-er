@@ -18,6 +18,7 @@ from src.resolution.clustering import (
     build_phase1_components,
     score_to_objective_weight,
     solve_component_with_pivot,
+    summarize_component_timing,
 )
 from src.resolution.confidence import (
     compute_base_confidence,
@@ -186,6 +187,27 @@ def test_compute_base_confidence_does_not_treat_singletons_as_perfect() -> None:
     assert route_cluster(evidence.base_confidence, evidence.cluster_size) == "keep_separate"
 
 
+def test_summarize_component_timing_reports_percentiles_and_slowest_size() -> None:
+    summary = summarize_component_timing(
+        [
+            {"component_id": _hex32(1), "node_count": 2, "elapsed_ms": 10.0},
+            {"component_id": _hex32(2), "node_count": 3, "elapsed_ms": 20.0},
+            {"component_id": _hex32(3), "node_count": 5, "elapsed_ms": 40.0},
+            {"component_id": _hex32(4), "node_count": 4, "elapsed_ms": 80.0},
+        ]
+    )
+
+    assert summary == {
+        "component_count": 4,
+        "total_elapsed_ms": 150.0,
+        "p50_elapsed_ms": 30.0,
+        "p95_elapsed_ms": 74.0,
+        "max_elapsed_ms": 80.0,
+        "slowest_component_id": _hex32(4),
+        "slowest_component_size": 4,
+    }
+
+
 def test_run_resolution_emits_cluster_confidence_and_suspicion_diagnostics(
     tmp_path: Path,
 ) -> None:
@@ -234,10 +256,18 @@ def test_run_resolution_emits_cluster_confidence_and_suspicion_diagnostics(
         "defer": 1,
         "keep_separate": 1,
     }
+    assert diagnostics_payload["elapsed_seconds"] >= 0.0
     assert diagnostics_payload["merged_edges_above_neutral_threshold"] == 3
     assert diagnostics_payload["suspicious_merges"][0]["entity_ids"] == [d, e, f]
     assert diagnostics_payload["suspicious_missed_merges"][0]["entity_id_a"] == a
     assert diagnostics_payload["suspicious_missed_merges"][0]["entity_id_b"] == c
+    assert diagnostics_payload["component_timing_summary"]["component_count"] == 2
+    assert diagnostics_payload["component_timing_summary"]["slowest_component_size"] == 3
+    assert diagnostics_payload["component_timing_summary"]["p50_elapsed_ms"] >= 0.0
+    assert (
+        diagnostics_payload["component_timing_summary"]["p95_elapsed_ms"]
+        <= diagnostics_payload["component_timing_summary"]["max_elapsed_ms"]
+    )
     assert diagnostics_payload["timing_by_size_bucket"]["3-5"]["component_count"] == 2
 
 

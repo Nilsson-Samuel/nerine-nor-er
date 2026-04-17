@@ -25,7 +25,7 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass
 from math import ceil, sqrt
 from time import perf_counter
-from typing import Any
+from typing import Any, Callable
 
 import networkx as nx
 import polars as pl
@@ -402,12 +402,34 @@ def solve_component_with_pivot(
 def solve_retained_components(
     components: list[ComponentState],
     base_seed: int = 0,
+    progress_every: int | None = None,
+    progress_callback: Callable[[int, int, float, float], None] | None = None,
 ) -> list[SolvedComponent]:
     """Solve each retained component independently in deterministic order."""
-    return [
-        solve_component_with_pivot(component, base_seed=base_seed)
-        for component in components
-    ]
+    solved_components: list[SolvedComponent] = []
+    max_component_ms = 0.0
+    solve_start = perf_counter()
+    component_count = len(components)
+
+    for solved_count, component in enumerate(components, start=1):
+        solved_component = solve_component_with_pivot(component, base_seed=base_seed)
+        solved_components.append(solved_component)
+        max_component_ms = max(max_component_ms, solved_component.elapsed_ms)
+        if (
+            progress_callback is not None
+            and progress_every is not None
+            and progress_every > 0
+            and solved_count % progress_every == 0
+            and solved_count < component_count
+        ):
+            progress_callback(
+                solved_count,
+                component_count,
+                perf_counter() - solve_start,
+                max_component_ms,
+            )
+
+    return solved_components
 
 
 def summarize_components(
@@ -560,6 +582,56 @@ def summarize_timing_by_size_bucket(
             "total_elapsed_ms": round(sum(elapsed_values), 3),
         }
     return summary
+
+
+def _percentile(sorted_values: list[float], quantile: float) -> float:
+    """Return one percentile using linear interpolation over sorted values."""
+    if not sorted_values:
+        return 0.0
+    if len(sorted_values) == 1:
+        return sorted_values[0]
+
+    rank = quantile * (len(sorted_values) - 1)
+    lower_index = int(rank)
+    upper_index = ceil(rank)
+    if lower_index == upper_index:
+        return sorted_values[lower_index]
+
+    lower_value = sorted_values[lower_index]
+    upper_value = sorted_values[upper_index]
+    share = rank - lower_index
+    return lower_value + ((upper_value - lower_value) * share)
+
+
+def summarize_component_timing(
+    timing_rows: list[dict[str, Any]],
+) -> dict[str, float | int | str | None]:
+    """Collapse per-component timings into compact stage-level metrics."""
+    if not timing_rows:
+        return {
+            "component_count": 0,
+            "total_elapsed_ms": 0.0,
+            "p50_elapsed_ms": 0.0,
+            "p95_elapsed_ms": 0.0,
+            "max_elapsed_ms": 0.0,
+            "slowest_component_id": None,
+            "slowest_component_size": 0,
+        }
+
+    elapsed_values = sorted(float(row["elapsed_ms"]) for row in timing_rows)
+    slowest_row = max(
+        timing_rows,
+        key=lambda row: (float(row["elapsed_ms"]), int(row["node_count"]), row["component_id"]),
+    )
+    return {
+        "component_count": len(timing_rows),
+        "total_elapsed_ms": round(sum(elapsed_values), 3),
+        "p50_elapsed_ms": round(_percentile(elapsed_values, 0.50), 3),
+        "p95_elapsed_ms": round(_percentile(elapsed_values, 0.95), 3),
+        "max_elapsed_ms": round(max(elapsed_values), 3),
+        "slowest_component_id": str(slowest_row["component_id"]),
+        "slowest_component_size": int(slowest_row["node_count"]),
+    }
 
 
 def build_resolution_diagnostics(

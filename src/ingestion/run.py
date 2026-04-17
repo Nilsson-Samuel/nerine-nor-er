@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 
 # Threshold for flagging extraction as too short (chars after normalization)
 _MIN_EXTRACTED_CHARS = 20
+_DOCUMENT_PROGRESS_LOG_INTERVAL = 100
 _NO_INPUT_FILES_TEMPLATE = "No PDF/DOCX files found under case_root: {case_root}"
 
 
@@ -93,13 +94,15 @@ def _run_chunking(
     """Chunk all documents and return flat list of chunk rows."""
     splitter = build_splitter()
     all_chunks: list[dict] = []
+    total_docs = len(units_by_doc)
 
-    for doc_id in sorted(units_by_doc.keys()):
+    for index, doc_id in enumerate(sorted(units_by_doc.keys()), start=1):
         units = units_by_doc[doc_id]
         doc_chunks = chunk_document(doc_id, units, splitter)
         for chunk in doc_chunks:
             chunk["run_id"] = run_id
         all_chunks.extend(doc_chunks)
+        _log_count_progress("Chunking", index, total_docs, unit="documents")
 
     logger.info("Chunked %d documents → %d chunks", len(units_by_doc), len(all_chunks))
     return all_chunks
@@ -335,55 +338,59 @@ def run_extraction_and_normalization(
     # Extracted + normalized units per doc
     result: dict[str, list[dict]] = {}
 
-    for doc_id, rel_path, mime_type in rows:
-        abs_path = case_root / rel_path
+    total_docs = len(rows)
+    for index, (doc_id, rel_path, mime_type) in enumerate(rows, start=1):
+        try:
+            abs_path = case_root / rel_path
 
-        if not abs_path.exists():
-            _warn(warnings, "file_not_found")
-            logger.warning("file_not_found: %s", rel_path)
-            result[doc_id] = []
-            page_counts[doc_id] = 0
-            continue
+            if not abs_path.exists():
+                _warn(warnings, "file_not_found")
+                logger.warning("file_not_found: %s", rel_path)
+                result[doc_id] = []
+                page_counts[doc_id] = 0
+                continue
 
-        # Verify file content still matches the registered doc_id
-        current_hash = compute_doc_id(abs_path)
-        if current_hash != doc_id:
-            _warn(warnings, "content_changed_since_registration")
-            logger.warning(
-                "content_changed_since_registration: %s "
-                "(registered=%s, current=%s) — skipping extraction",
-                rel_path, doc_id, current_hash,
-            )
-            continue
+            # Verify file content still matches the registered doc_id
+            current_hash = compute_doc_id(abs_path)
+            if current_hash != doc_id:
+                _warn(warnings, "content_changed_since_registration")
+                logger.warning(
+                    "content_changed_since_registration: %s "
+                    "(registered=%s, current=%s) — skipping extraction",
+                    rel_path, doc_id, current_hash,
+                )
+                continue
 
-        # Extract raw text units
-        if mime_type == "application/pdf":
-            units = extract_pdf_units(abs_path)
-        else:
-            units = extract_docx_units(abs_path)
+            # Extract raw text units
+            if mime_type == "application/pdf":
+                units = extract_pdf_units(abs_path)
+            else:
+                units = extract_docx_units(abs_path)
 
-        page_counts[doc_id] = len(units)
+            page_counts[doc_id] = len(units)
 
-        # Normalize each unit and check extraction quality
-        normalized_units = []
-        doc_char_total = 0
-        for unit in units:
-            clean_text = normalize_text(unit["text"])
-            doc_char_total += len(clean_text)
-            normalized_units.append({
-                "page_num": unit["page_num"],
-                "text": clean_text,
-                "source_unit_kind": unit["source_unit_kind"],
-            })
+            # Normalize each unit and check extraction quality
+            normalized_units = []
+            doc_char_total = 0
+            for unit in units:
+                clean_text = normalize_text(unit["text"])
+                doc_char_total += len(clean_text)
+                normalized_units.append({
+                    "page_num": unit["page_num"],
+                    "text": clean_text,
+                    "source_unit_kind": unit["source_unit_kind"],
+                })
 
-        # Flag documents with very little extracted text
-        if doc_char_total < _MIN_EXTRACTED_CHARS:
-            _warn(warnings, "extraction_failed_or_short")
-            logger.warning(
-                "extraction_failed_or_short: %s (%d chars)", rel_path, doc_char_total
-            )
+            # Flag documents with very little extracted text
+            if doc_char_total < _MIN_EXTRACTED_CHARS:
+                _warn(warnings, "extraction_failed_or_short")
+                logger.warning(
+                    "extraction_failed_or_short: %s (%d chars)", rel_path, doc_char_total
+                )
 
-        result[doc_id] = normalized_units
+            result[doc_id] = normalized_units
+        finally:
+            _log_count_progress("Extraction", index, total_docs, unit="documents")
 
     # Backfill page_count in docs.parquet
     _update_page_counts(docs_path, run_id, page_counts)
@@ -403,6 +410,21 @@ def run_extraction_and_normalization(
 def _warn(counters: dict[str, int], category: str) -> None:
     """Increment a warning counter."""
     counters[category] = counters.get(category, 0) + 1
+
+
+def _log_count_progress(
+    stage_name: str,
+    completed: int,
+    total: int,
+    *,
+    unit: str,
+) -> None:
+    """Emit low-noise count progress for long document-level loops."""
+    if total < _DOCUMENT_PROGRESS_LOG_INTERVAL:
+        return
+    if completed % _DOCUMENT_PROGRESS_LOG_INTERVAL != 0 and completed != total:
+        return
+    logger.info("%s progress: %d/%d %s", stage_name, completed, total, unit)
 
 
 def _update_page_counts(

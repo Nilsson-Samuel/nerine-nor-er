@@ -45,3 +45,20 @@ def test_run_features_logs_diagnostics_for_all_feature_columns(
     }
 
     assert logged_columns == set(FEATURE_COLUMNS)
+
+
+def test_run_features_logs_stage_progress(
+    handoff_dir: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.INFO, logger="src.matching.run")
+
+    run_features(handoff_dir, DEFAULT_RUN_ID)
+
+    assert "Matching features start: 2 candidate pairs" in caplog.text
+    assert "Building string features... done in " in caplog.text
+    assert "Building embedding features... done in " in caplog.text
+    assert "Building structured identity features... done in " in caplog.text
+    assert "Building cooccurrence features... done in " in caplog.text
+    assert "Writing features... done" in caplog.text
+    assert "Matching features complete: 2 rows in " in caplog.text

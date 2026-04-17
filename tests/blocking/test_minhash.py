@@ -8,8 +8,11 @@ Covers:
 - Abbreviation / partial overlap detection at low threshold (0.3)
 """
 
+import logging
+
 import pytest
 
+from src.blocking import minhash
 from src.blocking.minhash import build_minhash_index, query_minhash_pairs
 
 
@@ -54,3 +57,17 @@ class TestMinHashBlocking:
         pairs = query_minhash_pairs(lsh, sigs, [ID_A, ID_B])
         pair_set = {(min(a, b), max(a, b)) for a, b in pairs}
         assert (ID_A, ID_B) in pair_set
+
+    def test_logs_progress_for_large_enough_inputs(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ):
+        monkeypatch.setattr(minhash, "_MINHASH_PROGRESS_LOG_INTERVAL", 1)
+        caplog.set_level(logging.INFO, logger="src.blocking.minhash")
+
+        lsh, sigs = build_minhash_index([ID_A, ID_B], ["statsbygg", "statsbygg"])
+        query_minhash_pairs(lsh, sigs, [ID_A, ID_B])
+
+        assert "MinHash index progress: 1/2 entities" in caplog.text
+        assert "MinHash query progress: 1/2 entities" in caplog.text

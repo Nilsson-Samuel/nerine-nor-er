@@ -25,6 +25,8 @@ from src.shared.schemas import validate_contract_rules
 
 logger = logging.getLogger(__name__)
 
+_EXTRACTION_PROGRESS_LOG_INTERVAL = 200
+
 
 def run_extraction(
     data_dir: Path,
@@ -122,7 +124,7 @@ def run_mention_extraction(
         logger.warning("No chunks found for run_id=%s", run_id)
         return []
 
-    logger.info("Extracting mentions from %d chunks (run_id=%s)", len(chunks), run_id)
+    logger.info("Extraction start: %d chunks (run_id=%s)", len(chunks), run_id)
 
     # Load NER pipeline once before the loop
     ner_pipe = build_ner()
@@ -130,13 +132,15 @@ def run_mention_extraction(
     all_mentions: list[dict] = []
     counts = {"ner": 0, "regex": 0}
     type_counts: dict[str, int] = {}
+    progress_t0 = time.monotonic()
 
-    for chunk in chunks:
+    for index, chunk in enumerate(chunks, start=1):
         chunk_mentions = _extract_chunk_mentions(chunk, ner_pipe)
         for m in chunk_mentions:
             counts[m["source"]] = counts.get(m["source"], 0) + 1
             type_counts[m["type"]] = type_counts.get(m["type"], 0) + 1
         all_mentions.extend(chunk_mentions)
+        _log_extraction_progress(progress_t0, index, len(chunks), len(all_mentions))
 
     logger.info(
         "Mention extraction complete: %d mentions (ner=%d, regex=%d)",
@@ -216,6 +220,26 @@ def _extract_chunk_mentions(chunk: dict, ner_pipe: object) -> list[dict]:
     regex_mentions, ner_mentions = merge_regex_with_ner(regex_mentions, ner_mentions)
 
     return ner_mentions + regex_mentions
+
+
+def _log_extraction_progress(
+    started_at: float,
+    completed: int,
+    total: int,
+    mention_count: int,
+) -> None:
+    """Emit low-noise extraction progress for long chunk loops."""
+    if total < _EXTRACTION_PROGRESS_LOG_INTERVAL:
+        return
+    if completed % _EXTRACTION_PROGRESS_LOG_INTERVAL != 0:
+        return
+    logger.info(
+        "Extraction progress: %d/%d chunks in %.1fs, %d mentions found so far",
+        completed,
+        total,
+        time.monotonic() - started_at,
+        mention_count,
+    )
 
 
 def _build_chunk_text_lookup(

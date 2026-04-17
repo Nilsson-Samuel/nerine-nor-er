@@ -12,6 +12,7 @@ Covers important (validation gate) criteria:
 """
 
 import json
+import logging
 from pathlib import Path
 
 import fitz
@@ -19,6 +20,7 @@ import pyarrow.parquet as pq
 import pytest
 from docx import Document
 
+import src.ingestion.run as ingestion_run
 from src.ingestion.chunking import (
     CHUNK_OVERLAP,
     CHUNK_SIZE,
@@ -478,3 +480,18 @@ class TestRunIngestion:
         )
         result = run_extraction_and_normalization(case_root, data_dir, run_id)
         assert len(result) > 0
+
+    def test_logs_document_progress_for_long_loops(
+        self,
+        case_root: Path,
+        data_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ):
+        monkeypatch.setattr(ingestion_run, "_DOCUMENT_PROGRESS_LOG_INTERVAL", 1)
+        caplog.set_level(logging.INFO, logger="src.ingestion.run")
+
+        ingestion_run.run_ingestion(case_root, data_dir, run_id="progress_test")
+
+        assert "Extraction progress: 1/2 documents" in caplog.text
+        assert "Chunking progress: 1/2 documents" in caplog.text

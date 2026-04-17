@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -26,6 +27,11 @@ from src.matching.writer import (
     RUN_OUTPUTS_DIRNAME,
     _encode_run_id_path_segment,
 )
+
+try:
+    from tqdm.auto import tqdm as _tqdm
+except ImportError:  # pragma: no cover - exercised through the no-dependency fallback.
+    _tqdm = None
 
 
 logger = logging.getLogger(__name__)
@@ -146,21 +152,25 @@ def run_pipeline(
     error_message: str | None = None
     current_stage = "initialization"
     pipeline_status = "succeeded"
+    progress_bar: Any | None = None
 
     try:
         if not case_root.exists():
             raise FileNotFoundError(f"case_root does not exist: {case_root}")
         if not case_root.is_dir():
             raise NotADirectoryError(f"case_root is not a directory: {case_root}")
+        progress_bar = _build_pipeline_progress(total_stages=len(stage_specs))
 
         for index, spec in enumerate(stage_specs):
             current_stage = str(spec["name"])
+            progress_bar = _set_progress_stage(progress_bar, current_stage)
             record = _execute_stage(
                 stage_name=current_stage,
                 action=spec["action"],
                 summarize=lambda result, spec=spec: summarize_stage(spec, result),
                 stages=stages,
             )
+            progress_bar = _advance_progress(progress_bar)
             if record["outcome"] == "no_results":
                 pipeline_status = "succeeded_no_results"
                 _append_skipped_stages(
@@ -199,6 +209,7 @@ def run_pipeline(
             write_summary(summary_path, summary)
         except Exception:
             logger.exception("Failed to write pipeline summary to %s", summary_path)
+        _close_progress(progress_bar)
 
     logger.info(
         "Pipeline complete for run_id=%s summary=%s",
@@ -230,6 +241,69 @@ def _configure_logging() -> None:
     """Install one basic logging handler when none exists."""
     if not logging.getLogger().handlers:
         logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+
+
+def _build_pipeline_progress(total_stages: int) -> Any | None:
+    """Build one stage-level progress bar for interactive terminal runs only."""
+    if _tqdm is None or not _stderr_is_tty():
+        return None
+    try:
+        return _tqdm(
+            total=total_stages,
+            desc="pipeline",
+            unit="stage",
+            leave=False,
+            dynamic_ncols=True,
+            file=sys.stderr,
+        )
+    except Exception:
+        logger.warning("Disabling pipeline progress bar after initialization failed.", exc_info=True)
+        return None
+
+
+def _stderr_is_tty() -> bool:
+    """Return whether stderr supports live progress rendering."""
+    stream = getattr(sys, "stderr", None)
+    return bool(stream is not None and hasattr(stream, "isatty") and stream.isatty())
+
+
+def _set_progress_stage(progress_bar: Any | None, stage_name: str) -> Any | None:
+    """Show the currently running stage on the pipeline progress bar."""
+    if progress_bar is None:
+        return None
+    try:
+        progress_bar.set_description(f"pipeline [{stage_name}]")
+        return progress_bar
+    except Exception:
+        logger.warning(
+            "Disabling pipeline progress bar after stage label update failed.",
+            exc_info=True,
+        )
+        _close_progress(progress_bar)
+        return None
+
+
+def _advance_progress(progress_bar: Any | None) -> Any | None:
+    """Advance the progress bar after one stage finishes successfully."""
+    if progress_bar is None:
+        return None
+    try:
+        progress_bar.update(1)
+        return progress_bar
+    except Exception:
+        logger.warning("Disabling pipeline progress bar after update failed.", exc_info=True)
+        _close_progress(progress_bar)
+        return None
+
+
+def _close_progress(progress_bar: Any | None) -> None:
+    """Close the progress bar cleanly when the pipeline exits."""
+    if progress_bar is None:
+        return
+    try:
+        progress_bar.close()
+    except Exception:
+        logger.warning("Failed to close pipeline progress bar cleanly.", exc_info=True)
 
 
 def _execute_stage(

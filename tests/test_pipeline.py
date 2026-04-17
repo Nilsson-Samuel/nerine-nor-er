@@ -163,6 +163,31 @@ def _write_resolution_outputs(data_dir: Path, run_id: str) -> None:
     )
 
 
+class _FakeProgressBar:
+    """Record progress-bar lifecycle calls without rendering terminal output."""
+
+    def __init__(self) -> None:
+        self.descriptions: list[str] = []
+        self.updates: list[int] = []
+        self.closed = False
+
+    def set_description(self, value: str) -> None:
+        self.descriptions.append(value)
+
+    def update(self, value: int) -> None:
+        self.updates.append(value)
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class _TTYStream:
+    """Minimal stderr stub that reports itself as interactive."""
+
+    def isatty(self) -> bool:
+        return True
+
+
 def test_run_pipeline_calls_stages_in_order_and_writes_summary(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -250,6 +275,183 @@ def test_run_pipeline_calls_stages_in_order_and_writes_summary(
     assert "Finished stage=resolution success=true" in caplog.text
 
 
+def test_build_pipeline_progress_returns_none_without_tty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeStream:
+        def isatty(self) -> bool:
+            return False
+
+    calls: list[object] = []
+
+    def fake_tqdm(*args: object, **kwargs: object) -> object:
+        calls.append((args, kwargs))
+        return object()
+
+    monkeypatch.setattr(pipeline, "_tqdm", fake_tqdm)
+    monkeypatch.setattr(pipeline.sys, "stderr", _FakeStream())
+
+    assert pipeline._build_pipeline_progress(total_stages=6) is None
+    assert calls == []
+
+
+def test_build_pipeline_progress_disables_bar_when_tqdm_init_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level("WARNING")
+
+    def fake_tqdm(*args: object, **kwargs: object) -> object:
+        raise OSError("stderr write failed")
+
+    monkeypatch.setattr(pipeline, "_tqdm", fake_tqdm)
+    monkeypatch.setattr(pipeline.sys, "stderr", _TTYStream())
+
+    assert pipeline._build_pipeline_progress(total_stages=6) is None
+    assert "Disabling pipeline progress bar after initialization failed." in caplog.text
+
+
+def test_run_pipeline_updates_and_closes_progress_bar(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    case_root = tmp_path / "case"
+    case_root.mkdir()
+    data_dir = tmp_path / "data"
+    run_id = "pipeline_progress_001"
+    progress_bar = _FakeProgressBar()
+
+    def fake_ingestion(case_root_arg: Path, data_dir_arg: Path, run_id: str | None = None) -> str:
+        _write_ingestion_outputs(data_dir_arg, run_id or "")
+        return run_id or ""
+
+    def fake_extraction(data_dir_arg: Path, run_id_arg: str) -> str:
+        _write_extraction_outputs(data_dir_arg, run_id_arg)
+        return run_id_arg
+
+    def fake_blocking(data_dir_arg: Path, run_id_arg: str) -> str:
+        _write_blocking_outputs(data_dir_arg, run_id_arg)
+        return run_id_arg
+
+    def fake_features(data_dir_arg: Path, run_id_arg: str) -> list[dict[str, str]]:
+        features_path = get_features_output_path(data_dir_arg, run_id_arg)
+        features_path.parent.mkdir(parents=True, exist_ok=True)
+        pq.write_table(
+            pa.table({"run_id": pa.array([run_id_arg], type=pa.string())}),
+            features_path,
+        )
+        return [{"run_id": run_id_arg}]
+
+    def fake_scoring(
+        data_dir_arg: Path,
+        run_id_arg: str,
+        **_kwargs: object,
+    ) -> list[dict[str, str]]:
+        scored_pairs_path = get_scored_pairs_output_path(data_dir_arg, run_id_arg)
+        pq.write_table(
+            pa.table({"run_id": pa.array([run_id_arg], type=pa.string())}),
+            scored_pairs_path,
+        )
+        get_scoring_metadata_path(data_dir_arg, run_id_arg).write_text(
+            json.dumps({"run_id": run_id_arg}),
+            encoding="utf-8",
+        )
+        return [{"run_id": run_id_arg}]
+
+    def fake_resolution(data_dir_arg: Path, run_id_arg: str) -> dict[str, int]:
+        _write_resolution_outputs(data_dir_arg, run_id_arg)
+        return {"cluster_count": 1}
+
+    monkeypatch.setattr(pipeline, "_build_pipeline_progress", lambda total_stages: progress_bar)
+    monkeypatch.setattr(pipeline, "run_ingestion", fake_ingestion)
+    monkeypatch.setattr(pipeline, "run_extraction", fake_extraction)
+    monkeypatch.setattr(pipeline, "run_blocking", fake_blocking)
+    monkeypatch.setattr(pipeline, "run_features", fake_features)
+    monkeypatch.setattr(pipeline, "run_scoring", fake_scoring)
+    monkeypatch.setattr(pipeline, "run_resolution", fake_resolution)
+
+    pipeline.run_pipeline(case_root, data_dir, run_id=run_id)
+
+    assert progress_bar.descriptions == [f"pipeline [{stage}]" for stage in pipeline.STAGE_ORDER]
+    assert progress_bar.updates == [1] * len(pipeline.STAGE_ORDER)
+    assert progress_bar.closed is True
+
+
+def test_run_pipeline_ignores_progress_update_failures(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class _ExplodingProgressBar(_FakeProgressBar):
+        def set_description(self, value: str) -> None:
+            super().set_description(value)
+            raise OSError("terminal lost")
+
+    caplog.set_level("WARNING")
+    case_root = tmp_path / "case"
+    case_root.mkdir()
+    data_dir = tmp_path / "data"
+    run_id = "pipeline_progress_update_failure"
+    progress_bar = _ExplodingProgressBar()
+
+    def fake_ingestion(case_root_arg: Path, data_dir_arg: Path, run_id: str | None = None) -> str:
+        _write_ingestion_outputs(data_dir_arg, run_id or "")
+        return run_id or ""
+
+    def fake_extraction(data_dir_arg: Path, run_id_arg: str) -> str:
+        _write_extraction_outputs(data_dir_arg, run_id_arg)
+        return run_id_arg
+
+    def fake_blocking(data_dir_arg: Path, run_id_arg: str) -> str:
+        _write_blocking_outputs(data_dir_arg, run_id_arg)
+        return run_id_arg
+
+    def fake_features(data_dir_arg: Path, run_id_arg: str) -> list[dict[str, str]]:
+        features_path = get_features_output_path(data_dir_arg, run_id_arg)
+        features_path.parent.mkdir(parents=True, exist_ok=True)
+        pq.write_table(
+            pa.table({"run_id": pa.array([run_id_arg], type=pa.string())}),
+            features_path,
+        )
+        return [{"run_id": run_id_arg}]
+
+    def fake_scoring(
+        data_dir_arg: Path,
+        run_id_arg: str,
+        **_kwargs: object,
+    ) -> list[dict[str, str]]:
+        scored_pairs_path = get_scored_pairs_output_path(data_dir_arg, run_id_arg)
+        pq.write_table(
+            pa.table({"run_id": pa.array([run_id_arg], type=pa.string())}),
+            scored_pairs_path,
+        )
+        get_scoring_metadata_path(data_dir_arg, run_id_arg).write_text(
+            json.dumps({"run_id": run_id_arg}),
+            encoding="utf-8",
+        )
+        return [{"run_id": run_id_arg}]
+
+    def fake_resolution(data_dir_arg: Path, run_id_arg: str) -> dict[str, int]:
+        _write_resolution_outputs(data_dir_arg, run_id_arg)
+        return {"cluster_count": 1}
+
+    monkeypatch.setattr(pipeline, "_build_pipeline_progress", lambda total_stages: progress_bar)
+    monkeypatch.setattr(pipeline, "run_ingestion", fake_ingestion)
+    monkeypatch.setattr(pipeline, "run_extraction", fake_extraction)
+    monkeypatch.setattr(pipeline, "run_blocking", fake_blocking)
+    monkeypatch.setattr(pipeline, "run_features", fake_features)
+    monkeypatch.setattr(pipeline, "run_scoring", fake_scoring)
+    monkeypatch.setattr(pipeline, "run_resolution", fake_resolution)
+
+    summary = pipeline.run_pipeline(case_root, data_dir, run_id=run_id)
+
+    assert summary["status"] == "succeeded"
+    assert progress_bar.descriptions == ["pipeline [ingestion]"]
+    assert progress_bar.updates == []
+    assert progress_bar.closed is True
+    assert "Disabling pipeline progress bar after stage label update failed." in caplog.text
+
+
 def test_run_pipeline_writes_failed_summary_and_stops_on_first_error(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -296,6 +498,48 @@ def test_run_pipeline_writes_failed_summary_and_stops_on_first_error(
     assert persisted["counts"]["docs"] == 1
     assert persisted["counts"]["chunks"] == 1
     assert persisted["counts"]["entities"] is None
+
+
+def test_run_pipeline_preserves_stage_failure_when_progress_close_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class _CloseFailingProgressBar(_FakeProgressBar):
+        def close(self) -> None:
+            self.closed = True
+            raise OSError("close failed")
+
+    caplog.set_level("WARNING")
+    case_root = tmp_path / "case"
+    case_root.mkdir()
+    data_dir = tmp_path / "data"
+    run_id = "pipeline_progress_close_failure"
+    progress_bar = _CloseFailingProgressBar()
+
+    def fake_ingestion(case_root_arg: Path, data_dir_arg: Path, run_id: str | None = None) -> str:
+        _write_ingestion_outputs(data_dir_arg, run_id or "")
+        return run_id or ""
+
+    def fake_extraction(_data_dir_arg: Path, run_id_arg: str) -> str:
+        raise ValueError(f"bad extraction for {run_id_arg}")
+
+    monkeypatch.setattr(pipeline, "_build_pipeline_progress", lambda total_stages: progress_bar)
+    monkeypatch.setattr(pipeline, "run_ingestion", fake_ingestion)
+    monkeypatch.setattr(pipeline, "run_extraction", fake_extraction)
+
+    with pytest.raises(RuntimeError, match="stage 'extraction'"):
+        pipeline.run_pipeline(case_root, data_dir, run_id=run_id)
+
+    persisted = json.loads(
+        pipeline.get_pipeline_summary_path(data_dir, run_id).read_text(encoding="utf-8")
+    )
+
+    assert persisted["status"] == "failed"
+    assert persisted["failed_stage"] == "extraction"
+    assert persisted["error"] == f"ValueError: bad extraction for {run_id}"
+    assert progress_bar.closed is True
+    assert "Failed to close pipeline progress bar cleanly." in caplog.text
 
 
 def test_run_pipeline_fails_early_for_empty_case_root_and_surfaces_reason(

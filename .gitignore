@@ -9,6 +9,7 @@ venv/
 data/processed/
 data/raw/
 data/synthetic/
+data/runs/
 data/mock_handoff/
 models/*.lgb
 *.npy
