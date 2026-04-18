@@ -30,9 +30,9 @@ from src.ingestion.extraction import extract_docx_units, extract_pdf_units
 from src.ingestion.normalization import normalize_text
 from src.matching.writer import get_scored_pairs_output_path
 from src.shared.paths import (
-    RUN_OUTPUTS_DIRNAME,
-    _encode_run_id_path_segment,
     get_blocking_run_output_dir,
+    get_evaluation_labels_path,
+    get_evaluation_report_path,
     get_extraction_run_output_dir,
     get_ingestion_run_output_dir,
 )
@@ -40,9 +40,6 @@ from src.resolution.writer import get_resolved_entities_output_path
 from src.shared import schemas
 from src.synthetic.build_matching_dataset import LABELS_SCHEMA
 
-EVALUATION_STAGE_DIRNAME = "evaluation"
-EVALUATION_REPORT_FILENAME = "evaluation_report.json"
-LABELS_FILENAME = "labels.parquet"
 DEFAULT_MATCH_THRESHOLD = 0.5
 DEFAULT_ALLOWED_METRIC_DROP = {
     "pairwise_f1": 0.03,
@@ -90,27 +87,6 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="Optional doc_id allowlist for labels written to --shared-labels-path.",
     )
     return parser.parse_args(argv)
-
-
-def get_evaluation_run_output_dir(data_dir: Path | str, run_id: str) -> Path:
-    """Build the per-run evaluation output directory."""
-    return (
-        Path(data_dir)
-        / RUN_OUTPUTS_DIRNAME
-        / _encode_run_id_path_segment(run_id)
-        / EVALUATION_STAGE_DIRNAME
-    )
-
-
-def get_evaluation_report_path(data_dir: Path | str, run_id: str) -> Path:
-    """Build the per-run evaluation report path."""
-    return get_evaluation_run_output_dir(data_dir, run_id) / EVALUATION_REPORT_FILENAME
-
-
-def get_evaluation_labels_path(data_dir: Path | str, run_id: str) -> Path:
-    """Build the per-run matcher-label bridge path."""
-    return get_evaluation_run_output_dir(data_dir, run_id) / LABELS_FILENAME
-
 
 def run_evaluation(
     data_dir: Path | str,

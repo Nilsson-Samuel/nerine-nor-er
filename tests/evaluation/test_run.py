@@ -20,8 +20,6 @@ from src.evaluation.run import (
     _remap_gold_offsets_to_run_text,
     _remap_gold_doc_ids,
     build_regression_checks,
-    get_evaluation_labels_path,
-    get_evaluation_report_path,
     run_evaluation,
 )
 from src.matching.writer import (
@@ -30,7 +28,13 @@ from src.matching.writer import (
 )
 from src.resolution.writer import get_resolved_entities_output_path
 from src.shared import schemas
-from src.shared.paths import get_blocking_run_output_dir, get_extraction_run_output_dir, get_ingestion_run_output_dir
+from src.shared.paths import (
+    get_blocking_run_output_dir,
+    get_evaluation_labels_path,
+    get_evaluation_report_path,
+    get_extraction_run_output_dir,
+    get_ingestion_run_output_dir,
+)
 
 
 def _hex32(number: int) -> str:

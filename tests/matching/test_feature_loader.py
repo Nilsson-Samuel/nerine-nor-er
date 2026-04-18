@@ -14,9 +14,13 @@ import duckdb
 import pyarrow.parquet as pq
 import pytest
 
-from src.shared.fixtures import DEFAULT_RUN_ID, write_mock_handoff
-from src.matching.features import load_pairs_with_names
+from src.matching.features import (
+    PAIR_METADATA_COLUMNS,
+    load_pairs_with_metadata,
+    load_pairs_with_names,
+)
 from src.matching.writer import write_string_features
+from src.shared.fixtures import DEFAULT_RUN_ID, write_mock_handoff
 from src.shared.paths import get_blocking_run_output_dir, get_extraction_run_output_dir
 
 
@@ -91,6 +95,15 @@ def test_loader_unknown_run_id_returns_empty(handoff_dir: Path) -> None:
     df = load_pairs_with_names(handoff_dir, "nonexistent_run")
     assert len(df) == 0
     assert set(df.columns) == _EXPECTED_COLUMNS
+
+
+def test_metadata_loader_missing_run_returns_empty_metadata_schema(
+    handoff_dir: Path,
+) -> None:
+    df = load_pairs_with_metadata(handoff_dir, "missing_run")
+
+    assert df.is_empty()
+    assert df.columns == PAIR_METADATA_COLUMNS
 
 
 # ---------------------------------------------------------------------------

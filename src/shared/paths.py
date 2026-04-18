@@ -20,7 +20,11 @@ EXTRACTION_STAGE_DIRNAME = "extraction"
 BLOCKING_STAGE_DIRNAME = "blocking"
 MATCHING_STAGE_DIRNAME = "matching"
 RESOLUTION_STAGE_DIRNAME = "resolution"
+EVALUATION_STAGE_DIRNAME = "evaluation"
 PIPELINE_STAGE_DIRNAME = "pipeline"
+
+EVALUATION_REPORT_FILENAME = "evaluation_report.json"
+EVALUATION_LABELS_FILENAME = "labels.parquet"
 
 
 def _encode_run_id_path_segment(run_id: str) -> str:
@@ -57,6 +61,21 @@ def get_matching_run_output_dir(data_dir: Path | str, run_id: str) -> Path:
 def get_resolution_run_output_dir(data_dir: Path | str, run_id: str) -> Path:
     """Build the per-run resolution output directory."""
     return get_run_root_dir(data_dir, run_id) / RESOLUTION_STAGE_DIRNAME
+
+
+def get_evaluation_run_output_dir(data_dir: Path | str, run_id: str) -> Path:
+    """Build the per-run evaluation output directory."""
+    return get_run_root_dir(data_dir, run_id) / EVALUATION_STAGE_DIRNAME
+
+
+def get_evaluation_report_path(data_dir: Path | str, run_id: str) -> Path:
+    """Build the per-run evaluation report path."""
+    return get_evaluation_run_output_dir(data_dir, run_id) / EVALUATION_REPORT_FILENAME
+
+
+def get_evaluation_labels_path(data_dir: Path | str, run_id: str) -> Path:
+    """Build the per-run matcher-label bridge path."""
+    return get_evaluation_run_output_dir(data_dir, run_id) / EVALUATION_LABELS_FILENAME
 
 
 def get_pipeline_run_output_dir(data_dir: Path | str, run_id: str) -> Path:
