@@ -13,6 +13,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from src.shared import schemas
+from src.shared.paths import get_blocking_run_output_dir, get_extraction_run_output_dir
 from src.shared.validators import validate_embedding_alignment
 
 
@@ -231,8 +232,13 @@ def write_mock_handoff(out_dir: Path, run_id: str = DEFAULT_RUN_ID) -> None:
     if candidate_errors:
         raise ValueError(f"Mock candidates failed contract validation: {candidate_errors}")
 
-    pq.write_table(entities,   out_dir / "entities.parquet")
-    pq.write_table(candidates, out_dir / "candidate_pairs.parquet")
-    np.save(out_dir / "embeddings.npy", embeddings)
-    np.save(out_dir / "context_embeddings.npy", context_embeddings)
-    np.save(out_dir / "embedding_entity_ids.npy", embedding_entity_ids)
+    extraction_dir = get_extraction_run_output_dir(out_dir, run_id)
+    extraction_dir.mkdir(parents=True, exist_ok=True)
+    pq.write_table(entities, extraction_dir / "entities.parquet")
+
+    blocking_dir = get_blocking_run_output_dir(out_dir, run_id)
+    blocking_dir.mkdir(parents=True, exist_ok=True)
+    pq.write_table(candidates, blocking_dir / "candidate_pairs.parquet")
+    np.save(blocking_dir / "embeddings.npy", embeddings)
+    np.save(blocking_dir / "context_embeddings.npy", context_embeddings)
+    np.save(blocking_dir / "embedding_entity_ids.npy", embedding_entity_ids)

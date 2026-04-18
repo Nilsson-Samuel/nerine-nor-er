@@ -1,6 +1,5 @@
 """Parquet writers for intermediate matching artifacts."""
 
-import base64
 import json
 from collections.abc import Mapping
 from datetime import datetime, timezone
@@ -11,31 +10,14 @@ import polars as pl
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from src.shared.paths import get_matching_run_output_dir
 from src.shared.schemas import SCORED_PAIRS_SCHEMA
 
 
-RUN_OUTPUTS_DIRNAME = "runs"
-MATCHING_STAGE_DIRNAME = "matching"
 STRING_FEATURES_FILENAME = "string_features.parquet"
 FEATURES_FILENAME = "features.parquet"
 SCORED_PAIRS_FILENAME = "scored_pairs.parquet"
 SCORING_METADATA_FILENAME = "matching_scoring_metadata.json"
-
-
-def _encode_run_id_path_segment(run_id: str) -> str:
-    """Encode run_id into one cross-platform-safe directory name."""
-    encoded = base64.urlsafe_b64encode(run_id.encode("utf-8")).decode("ascii").rstrip("=")
-    return f"rid_{encoded}"
-
-
-def get_matching_run_output_dir(data_dir: Path | str, run_id: str) -> Path:
-    """Build the per-run matching output directory."""
-    return (
-        Path(data_dir)
-        / RUN_OUTPUTS_DIRNAME
-        / _encode_run_id_path_segment(run_id)
-        / MATCHING_STAGE_DIRNAME
-    )
 
 
 def get_features_output_path(data_dir: Path | str, run_id: str) -> Path:

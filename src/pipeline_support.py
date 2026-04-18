@@ -10,9 +10,14 @@ import pyarrow.parquet as pq
 
 from src.matching.writer import (
     get_features_output_path,
-    get_matching_run_output_dir,
     get_scored_pairs_output_path,
     get_scoring_metadata_path,
+)
+from src.shared.paths import (
+    get_blocking_run_output_dir,
+    get_extraction_run_output_dir,
+    get_ingestion_run_output_dir,
+    get_run_root_dir,
 )
 from src.resolution.writer import (
     get_clusters_output_path,
@@ -47,20 +52,20 @@ def build_stage_specs(
                 run_id=run_id,
             ),
             "counts": [
-                parquet_count("docs", data_dir / "docs.parquet", run_id=run_id),
+                parquet_count("docs", get_ingestion_run_output_dir(data_dir, run_id) / "docs.parquet", run_id=run_id),
                 parquet_count(
                     "chunks",
-                    data_dir / "chunks.parquet",
+                    get_ingestion_run_output_dir(data_dir, run_id) / "chunks.parquet",
                     run_id=run_id,
                     allow_zero=True,
                     stop_on_zero=True,
                 ),
             ],
             "artifacts": [
-                artifact_path("docs_path", data_dir / "docs.parquet", required=True),
+                artifact_path("docs_path", get_ingestion_run_output_dir(data_dir, run_id) / "docs.parquet", required=True),
                 artifact_path(
                     "chunks_path",
-                    data_dir / "chunks.parquet",
+                    get_ingestion_run_output_dir(data_dir, run_id) / "chunks.parquet",
                     required_if_results=True,
                 ),
             ],
@@ -71,7 +76,7 @@ def build_stage_specs(
             "counts": [
                 parquet_count(
                     "entities",
-                    data_dir / "entities.parquet",
+                    get_extraction_run_output_dir(data_dir, run_id) / "entities.parquet",
                     run_id=run_id,
                     allow_zero=True,
                     stop_on_zero=True,
@@ -80,7 +85,7 @@ def build_stage_specs(
             "artifacts": [
                 artifact_path(
                     "entities_path",
-                    data_dir / "entities.parquet",
+                    get_extraction_run_output_dir(data_dir, run_id) / "entities.parquet",
                     required_if_results=True,
                 )
             ],
@@ -91,7 +96,7 @@ def build_stage_specs(
             "counts": [
                 parquet_count(
                     "candidate_pairs",
-                    data_dir / "candidate_pairs.parquet",
+                    get_blocking_run_output_dir(data_dir, run_id) / "candidate_pairs.parquet",
                     run_id=run_id,
                     allow_zero=True,
                     stop_on_zero=True,
@@ -100,12 +105,12 @@ def build_stage_specs(
             "artifacts": [
                 artifact_path(
                     "candidate_pairs_path",
-                    data_dir / "candidate_pairs.parquet",
+                    get_blocking_run_output_dir(data_dir, run_id) / "candidate_pairs.parquet",
                     required_if_results=True,
                 ),
                 artifact_path(
                     "handoff_manifest_path",
-                    data_dir / "handoff_manifest.json",
+                    get_blocking_run_output_dir(data_dir, run_id) / "handoff_manifest.json",
                     required_if_results=True,
                 ),
             ],
@@ -374,10 +379,10 @@ def count_clusters(path: Path) -> int | None:
 def collect_counts(data_dir: Path, run_id: str) -> dict[str, int | None]:
     """Collect one compact end-of-run count snapshot across stage artifacts."""
     return {
-        "docs": count_parquet_rows(data_dir / "docs.parquet", run_id),
-        "chunks": count_parquet_rows(data_dir / "chunks.parquet", run_id),
-        "entities": count_parquet_rows(data_dir / "entities.parquet", run_id),
-        "candidate_pairs": count_parquet_rows(data_dir / "candidate_pairs.parquet", run_id),
+        "docs": count_parquet_rows(get_ingestion_run_output_dir(data_dir, run_id) / "docs.parquet", run_id),
+        "chunks": count_parquet_rows(get_ingestion_run_output_dir(data_dir, run_id) / "chunks.parquet", run_id),
+        "entities": count_parquet_rows(get_extraction_run_output_dir(data_dir, run_id) / "entities.parquet", run_id),
+        "candidate_pairs": count_parquet_rows(get_blocking_run_output_dir(data_dir, run_id) / "candidate_pairs.parquet", run_id),
         "features": count_parquet_rows(get_features_output_path(data_dir, run_id)),
         "scored_pairs": count_parquet_rows(get_scored_pairs_output_path(data_dir, run_id)),
         "resolved_entities": count_parquet_rows(get_resolved_entities_output_path(data_dir, run_id)),
@@ -391,7 +396,7 @@ def collect_artifact_paths(
     summary_path: Path,
 ) -> dict[str, str]:
     """Collect the main per-run artifact paths useful for debugging and HITL."""
-    run_output_dir = get_matching_run_output_dir(data_dir, run_id).parent
+    run_output_dir = get_run_root_dir(data_dir, run_id)
     return {
         "run_output_dir": str(run_output_dir),
         "pipeline_summary_path": str(summary_path),

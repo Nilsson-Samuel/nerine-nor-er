@@ -23,6 +23,10 @@ import pyarrow.parquet as pq
 from metaphone import doublemetaphone
 from rapidfuzz.distance import JaroWinkler, Levenshtein
 
+from src.shared.paths import (
+    get_blocking_run_output_dir,
+    get_extraction_run_output_dir,
+)
 from src.shared.validators import validate_embedding_alignment
 
 
@@ -88,6 +92,32 @@ PAIR_METADATA_COLUMNS = [
     "blocking_method_count",
 ]
 
+_PAIR_NAME_SCHEMA = {column: pl.Utf8 for column in PAIR_NAME_COLUMNS}
+_PAIR_METADATA_SCHEMA = {
+    **_PAIR_NAME_SCHEMA,
+    "context_a": pl.Utf8,
+    "context_b": pl.Utf8,
+    "entity_type_a": pl.Utf8,
+    "entity_type_b": pl.Utf8,
+    "doc_id_a": pl.Utf8,
+    "doc_id_b": pl.Utf8,
+    "blocking_method_count": pl.Int8,
+}
+
+
+def _get_pair_artifact_paths(data_dir: Path | str, run_id: str) -> tuple[Path, Path]:
+    """Build the per-run entities and candidate-pairs artifact paths."""
+    data_dir = Path(data_dir)
+    return (
+        get_extraction_run_output_dir(data_dir, run_id) / "entities.parquet",
+        get_blocking_run_output_dir(data_dir, run_id) / "candidate_pairs.parquet",
+    )
+
+
+def _empty_pairs_frame(schema: dict[str, pl.DataType]) -> pl.DataFrame:
+    """Build one empty pair-loader frame with a stable column schema."""
+    return pl.DataFrame(schema=schema)
+
 
 def _execute_pairs_query(
     db_path_or_con: "duckdb.DuckDBPyConnection | Path | str",
@@ -99,12 +129,14 @@ def _execute_pairs_query(
         table = db_path_or_con.execute(query, [run_id]).fetch_arrow_table()
         return pl.from_arrow(table)
 
-    data_dir = Path(db_path_or_con)
+    entities_path, candidate_pairs_path = _get_pair_artifact_paths(
+        db_path_or_con, run_id
+    )
     with duckdb.connect() as con:
-        con.register("entities", con.read_parquet(str(data_dir / "entities.parquet")))
+        con.register("entities", con.read_parquet(str(entities_path)))
         con.register(
             "candidate_pairs",
-            con.read_parquet(str(data_dir / "candidate_pairs.parquet")),
+            con.read_parquet(str(candidate_pairs_path)),
         )
         table = con.execute(query, [run_id]).fetch_arrow_table()
         return pl.from_arrow(table)
@@ -132,6 +164,13 @@ def load_pairs_with_names(
         Polars DataFrame with columns
         [run_id, entity_id_a, entity_id_b, name_a, name_b].
     """
+    if not isinstance(db_path_or_con, duckdb.DuckDBPyConnection):
+        entities_path, candidate_pairs_path = _get_pair_artifact_paths(
+            db_path_or_con, run_id
+        )
+        if not entities_path.exists() or not candidate_pairs_path.exists():
+            return _empty_pairs_frame(_PAIR_NAME_SCHEMA)
+
     return _execute_pairs_query(
         db_path_or_con=db_path_or_con,
         run_id=run_id,
@@ -147,6 +186,13 @@ def load_pairs_with_metadata(
 
     Returns exactly the columns listed in PAIR_METADATA_COLUMNS in stable row order.
     """
+    if not isinstance(db_path_or_con, duckdb.DuckDBPyConnection):
+        entities_path, candidate_pairs_path = _get_pair_artifact_paths(
+            db_path_or_con, run_id
+        )
+        if not entities_path.exists() or not candidate_pairs_path.exists():
+            return _empty_pairs_frame(_PAIR_METADATA_SCHEMA)
+
     return _execute_pairs_query(
         db_path_or_con=db_path_or_con,
         run_id=run_id,
@@ -210,13 +256,14 @@ def load_embedding_artifacts(data_dir: Path | str, run_id: str) -> EmbeddingArti
     - entities.parquet (source of the expected per-run entity_id order)
     """
     data_dir = Path(data_dir)
-    embeddings = np.load(data_dir / "embeddings.npy", allow_pickle=False)
-    context_embeddings = np.load(data_dir / "context_embeddings.npy", allow_pickle=False)
-    embedding_entity_ids = np.load(data_dir / "embedding_entity_ids.npy", allow_pickle=False)
+    blocking_dir = get_blocking_run_output_dir(data_dir, run_id)
+    embeddings = np.load(blocking_dir / "embeddings.npy", allow_pickle=False)
+    context_embeddings = np.load(blocking_dir / "context_embeddings.npy", allow_pickle=False)
+    embedding_entity_ids = np.load(blocking_dir / "embedding_entity_ids.npy", allow_pickle=False)
     entities = (
         pl.from_arrow(
             pq.read_table(
-                data_dir / "entities.parquet",
+                get_extraction_run_output_dir(data_dir, run_id) / "entities.parquet",
                 columns=["entity_id", "run_id"],
                 filters=[("run_id", "=", run_id)],
             )

@@ -21,6 +21,7 @@ from src.ingestion.discovery import discover_documents
 from src.ingestion.extraction import extract_docx_units, extract_pdf_units
 from src.ingestion.normalization import normalize_text
 from src.ingestion.registration import compute_doc_id, register_documents
+from src.shared.paths import get_ingestion_run_output_dir
 from src.shared.schemas import CHUNKS_SCHEMA, DOCS_SCHEMA
 
 logger = logging.getLogger(__name__)
@@ -121,7 +122,7 @@ def _write_chunks_parquet(
     prevent duplication on rerun.
     """
     data_dir = Path(data_dir)
-    chunks_path = data_dir / "chunks.parquet"
+    chunks_path = get_ingestion_run_output_dir(data_dir, run_id) / "chunks.parquet"
 
     if not chunks:
         logger.info("No chunks to write.")
@@ -204,7 +205,7 @@ def _write_run_metadata(
         meta["chunks_per_doc_max"] = max(chunks_per_doc)
         meta["chunks_per_doc_median"] = round(statistics.median(chunks_per_doc), 1)
 
-    meta_path = Path(data_dir) / "run_metadata.json"
+    meta_path = get_ingestion_run_output_dir(data_dir, run_id) / "run_metadata.json"
     meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
     logger.info("Wrote run metadata to %s", meta_path)
 
@@ -243,7 +244,9 @@ def run_discovery_and_registration(
     data_dir = Path(data_dir)
     data_dir.mkdir(parents=True, exist_ok=True)
 
-    docs_path = data_dir / "docs.parquet"
+    out_dir = get_ingestion_run_output_dir(data_dir, run_id)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    docs_path = out_dir / "docs.parquet"
 
     # Load existing parquet into DuckDB for dedup queries
     if docs_path.exists():
@@ -311,7 +314,7 @@ def run_extraction_and_normalization(
 
     case_root = Path(case_root).resolve()
     data_dir = Path(data_dir)
-    docs_path = data_dir / "docs.parquet"
+    docs_path = get_ingestion_run_output_dir(data_dir, run_id) / "docs.parquet"
 
     if not docs_path.exists():
         logger.warning("No docs.parquet found at %s", docs_path)

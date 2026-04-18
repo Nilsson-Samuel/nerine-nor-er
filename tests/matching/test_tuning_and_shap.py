@@ -21,6 +21,7 @@ from src.matching.writer import (
     get_scored_pairs_output_path,
 )
 from src.shared import schemas
+from src.shared.paths import get_blocking_run_output_dir
 from src.synthetic.build_matching_dataset import build_matching_dataset, load_labeled_feature_matrix
 
 
@@ -152,7 +153,7 @@ def test_run_scoring_with_shap_enabled_produces_contract_safe_top5(
         shap_max_rows=3,
     )
     scored_table = pq.read_table(get_scored_pairs_output_path(data_dir, run_id))
-    candidate_table = pq.read_table(data_dir / "candidate_pairs.parquet")
+    candidate_table = pq.read_table(get_blocking_run_output_dir(data_dir, run_id) / "candidate_pairs.parquet")
     metadata = _load_scoring_metadata(data_dir, run_id)
 
     assert schemas.validate_contract_rules(

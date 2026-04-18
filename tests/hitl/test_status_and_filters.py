@@ -14,12 +14,12 @@ from src.hitl.queries import (
     load_cluster_frame,
 )
 from src.hitl.status import diagnostics_sidebar_summary, load_diagnostics_safe
-from src.matching.writer import _encode_run_id_path_segment
+from src.shared.paths import _encode_run_id_path_segment
 from src.resolution.writer import (
     CLUSTERS_FILENAME,
     RESOLUTION_DIAGNOSTICS_FILENAME,
-    RESOLUTION_STAGE_DIRNAME,
 )
+from src.shared.paths import RESOLUTION_STAGE_DIRNAME
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────

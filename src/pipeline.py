@@ -23,10 +23,7 @@ from src.pipeline_support import (
     summarize_stage,
     write_summary,
 )
-from src.matching.writer import (
-    RUN_OUTPUTS_DIRNAME,
-    _encode_run_id_path_segment,
-)
+from src.shared.paths import get_pipeline_run_output_dir
 
 try:
     from tqdm.auto import tqdm as _tqdm
@@ -36,7 +33,6 @@ except ImportError:  # pragma: no cover - exercised through the no-dependency fa
 
 logger = logging.getLogger(__name__)
 
-PIPELINE_STAGE_DIRNAME = "pipeline"
 PIPELINE_SUMMARY_FILENAME = "pipeline_summary.json"
 STAGE_ORDER = [
     "ingestion",
@@ -102,16 +98,6 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="Generate SHAP top-5 explanations during matching scoring.",
     )
     return parser.parse_args(argv)
-
-
-def get_pipeline_run_output_dir(data_dir: Path | str, run_id: str) -> Path:
-    """Build the per-run pipeline output directory."""
-    return (
-        Path(data_dir)
-        / RUN_OUTPUTS_DIRNAME
-        / _encode_run_id_path_segment(run_id)
-        / PIPELINE_STAGE_DIRNAME
-    )
 
 
 def get_pipeline_summary_path(data_dir: Path | str, run_id: str) -> Path:

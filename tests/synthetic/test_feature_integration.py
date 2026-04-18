@@ -15,6 +15,7 @@ import pytest
 from src.matching.run import FEATURE_COLUMNS, FEATURE_OUTPUT_COLUMNS, run_features
 from src.matching.writer import get_features_output_path
 from src.shared import schemas
+from src.shared.paths import get_blocking_run_output_dir, get_extraction_run_output_dir
 from src.synthetic.build_matching_dataset import (
     LABELS_SCHEMA,
     build_matching_dataset,
@@ -109,7 +110,7 @@ def synthetic_data_dir(tmp_path: Path) -> tuple[Path, str]:
         encoding="utf-8",
     )
     build_matching_dataset(identity_groups_path, data_dir, max_pairs=2500, seed=7)
-    run_id = pl.read_parquet(data_dir / "entities.parquet").item(0, "run_id")
+    run_id = _IDENTITY_GROUPS_PAYLOAD["run_id"]
     return data_dir, run_id
 
 
@@ -149,8 +150,9 @@ def test_validate_synthetic_data_detects_orphan_and_unlabeled_pairs(
 def test_validate_synthetic_data_detects_pair_entity_reference_drift(
     synthetic_data_dir: tuple[Path, str],
 ) -> None:
-    data_dir, _ = synthetic_data_dir
-    candidates = pq.read_table(data_dir / "candidate_pairs.parquet").to_pylist()
+    data_dir, run_id = synthetic_data_dir
+    blocking_dir = get_blocking_run_output_dir(data_dir, run_id)
+    candidates = pq.read_table(blocking_dir / "candidate_pairs.parquet").to_pylist()
     labels = pq.read_table(data_dir / "labels.parquet").to_pylist()
 
     fake_a = "0" * 32
@@ -161,7 +163,7 @@ def test_validate_synthetic_data_detects_pair_entity_reference_drift(
     labels[0]["entity_id_b"] = fake_b
     pq.write_table(
         pa.Table.from_pylist(candidates, schema=schemas.CANDIDATE_PAIRS_SCHEMA),
-        data_dir / "candidate_pairs.parquet",
+        blocking_dir / "candidate_pairs.parquet",
     )
     pq.write_table(
         pa.Table.from_pylist(labels, schema=LABELS_SCHEMA),

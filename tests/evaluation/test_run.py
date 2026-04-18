@@ -20,8 +20,6 @@ from src.evaluation.run import (
     _remap_gold_offsets_to_run_text,
     _remap_gold_doc_ids,
     build_regression_checks,
-    get_evaluation_labels_path,
-    get_evaluation_report_path,
     run_evaluation,
 )
 from src.matching.writer import (
@@ -30,6 +28,13 @@ from src.matching.writer import (
 )
 from src.resolution.writer import get_resolved_entities_output_path
 from src.shared import schemas
+from src.shared.paths import (
+    get_blocking_run_output_dir,
+    get_evaluation_labels_path,
+    get_evaluation_report_path,
+    get_extraction_run_output_dir,
+    get_ingestion_run_output_dir,
+)
 
 
 def _hex32(number: int) -> str:
@@ -76,7 +81,9 @@ def _write_case_artifacts(tmp_path: Path, run_id: str) -> Path:
         },
         schema=schemas.DOCS_SCHEMA,
     )
-    pq.write_table(docs, data_dir / "docs.parquet")
+    ingestion_dir = get_ingestion_run_output_dir(data_dir, run_id)
+    ingestion_dir.mkdir(parents=True, exist_ok=True)
+    pq.write_table(docs, ingestion_dir / "docs.parquet")
 
     chunks = pa.table(
         {
@@ -100,7 +107,7 @@ def _write_case_artifacts(tmp_path: Path, run_id: str) -> Path:
         },
         schema=schemas.CHUNKS_SCHEMA,
     )
-    pq.write_table(chunks, data_dir / "chunks.parquet")
+    pq.write_table(chunks, ingestion_dir / "chunks.parquet")
 
     entities = pa.table(
         {
@@ -177,7 +184,9 @@ def _write_case_artifacts(tmp_path: Path, run_id: str) -> Path:
         },
         schema=schemas.ENTITIES_SCHEMA,
     )
-    pq.write_table(entities, data_dir / "entities.parquet")
+    extraction_dir = get_extraction_run_output_dir(data_dir, run_id)
+    extraction_dir.mkdir(parents=True, exist_ok=True)
+    pq.write_table(entities, extraction_dir / "entities.parquet")
 
     candidate_pairs = pa.table(
         {
@@ -196,7 +205,9 @@ def _write_case_artifacts(tmp_path: Path, run_id: str) -> Path:
         },
         schema=schemas.CANDIDATE_PAIRS_SCHEMA,
     )
-    pq.write_table(candidate_pairs, data_dir / "candidate_pairs.parquet")
+    blocking_dir = get_blocking_run_output_dir(data_dir, run_id)
+    blocking_dir.mkdir(parents=True, exist_ok=True)
+    pq.write_table(candidate_pairs, blocking_dir / "candidate_pairs.parquet")
 
     matching_dir = get_matching_run_output_dir(data_dir, run_id)
     matching_dir.mkdir(parents=True, exist_ok=True)
@@ -354,7 +365,9 @@ def _write_subset_metric_case_artifacts(tmp_path: Path, run_id: str) -> Path:
         },
         schema=schemas.DOCS_SCHEMA,
     )
-    pq.write_table(docs, data_dir / "docs.parquet")
+    ingestion_dir = get_ingestion_run_output_dir(data_dir, run_id)
+    ingestion_dir.mkdir(parents=True, exist_ok=True)
+    pq.write_table(docs, ingestion_dir / "docs.parquet")
 
     chunk_text = "Alice Brown met A. Brown and Observer."
     chunks = pa.table(
@@ -369,7 +382,7 @@ def _write_subset_metric_case_artifacts(tmp_path: Path, run_id: str) -> Path:
         },
         schema=schemas.CHUNKS_SCHEMA,
     )
-    pq.write_table(chunks, data_dir / "chunks.parquet")
+    pq.write_table(chunks, ingestion_dir / "chunks.parquet")
 
     entities = pa.table(
         {
@@ -425,7 +438,9 @@ def _write_subset_metric_case_artifacts(tmp_path: Path, run_id: str) -> Path:
         },
         schema=schemas.ENTITIES_SCHEMA,
     )
-    pq.write_table(entities, data_dir / "entities.parquet")
+    extraction_dir = get_extraction_run_output_dir(data_dir, run_id)
+    extraction_dir.mkdir(parents=True, exist_ok=True)
+    pq.write_table(entities, extraction_dir / "entities.parquet")
 
     candidate_pairs = pa.table(
         {
@@ -438,7 +453,9 @@ def _write_subset_metric_case_artifacts(tmp_path: Path, run_id: str) -> Path:
         },
         schema=schemas.CANDIDATE_PAIRS_SCHEMA,
     )
-    pq.write_table(candidate_pairs, data_dir / "candidate_pairs.parquet")
+    blocking_dir = get_blocking_run_output_dir(data_dir, run_id)
+    blocking_dir.mkdir(parents=True, exist_ok=True)
+    pq.write_table(candidate_pairs, blocking_dir / "candidate_pairs.parquet")
 
     matching_dir = get_matching_run_output_dir(data_dir, run_id)
     matching_dir.mkdir(parents=True, exist_ok=True)

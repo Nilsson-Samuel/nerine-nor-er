@@ -24,6 +24,7 @@ from src.ingestion.registration import (
     register_documents,
 )
 from src.ingestion.run import run_discovery_and_registration
+from src.shared.paths import get_ingestion_run_output_dir
 from src.shared.schemas import DOCS_SCHEMA, validate, validate_contract_rules
 
 
@@ -272,24 +273,24 @@ class TestRegisterDocuments:
 class TestRunDiscoveryAndRegistration:
     def test_creates_docs_parquet(self, case_root: Path, data_dir: Path):
         run_discovery_and_registration(case_root, data_dir, run_id="e2etest1")
-        docs_path = data_dir / "docs.parquet"
+        docs_path = get_ingestion_run_output_dir(data_dir, "e2etest1") / "docs.parquet"
         assert docs_path.exists()
 
     def test_parquet_schema_valid(self, case_root: Path, data_dir: Path):
         run_discovery_and_registration(case_root, data_dir, run_id="e2etest2")
-        table = pq.read_table(data_dir / "docs.parquet")
+        table = pq.read_table(get_ingestion_run_output_dir(data_dir, "e2etest2") / "docs.parquet")
         errors = validate(table, DOCS_SCHEMA)
         assert errors == []
 
     def test_parquet_contract_valid(self, case_root: Path, data_dir: Path):
         run_discovery_and_registration(case_root, data_dir, run_id="e2etest3")
-        table = pq.read_table(data_dir / "docs.parquet")
+        table = pq.read_table(get_ingestion_run_output_dir(data_dir, "e2etest3") / "docs.parquet")
         errors = validate_contract_rules(table, "docs")
         assert errors == []
 
     def test_correct_row_count(self, case_root: Path, data_dir: Path):
         run_discovery_and_registration(case_root, data_dir, run_id="e2etest4")
-        table = pq.read_table(data_dir / "docs.parquet")
+        table = pq.read_table(get_ingestion_run_output_dir(data_dir, "e2etest4") / "docs.parquet")
         assert len(table) == 3
 
     def test_incremental_no_duplicates(self, case_root: Path, data_dir: Path):
@@ -298,7 +299,7 @@ class TestRunDiscoveryAndRegistration:
         run_discovery_and_registration(case_root, data_dir, run_id=run_id)
         run_discovery_and_registration(case_root, data_dir, run_id=run_id)
 
-        table = pq.read_table(data_dir / "docs.parquet")
+        table = pq.read_table(get_ingestion_run_output_dir(data_dir, run_id) / "docs.parquet")
         assert len(table) == 3  # Not 6
 
         # Contract validation catches uniqueness violations
@@ -320,31 +321,31 @@ class TestRunDiscoveryAndRegistration:
         empty.mkdir()
         with pytest.raises(ValueError, match="No PDF/DOCX files found under case_root"):
             run_discovery_and_registration(empty, data_dir, run_id="emptyrun")
-        assert not (data_dir / "docs.parquet").exists()
+        assert not (get_ingestion_run_output_dir(data_dir, "emptyrun") / "docs.parquet").exists()
 
     def test_all_paths_relative(self, case_root: Path, data_dir: Path):
         run_discovery_and_registration(case_root, data_dir, run_id="relpath")
-        table = pq.read_table(data_dir / "docs.parquet")
+        table = pq.read_table(get_ingestion_run_output_dir(data_dir, "relpath") / "docs.parquet")
         paths = table.column("path").to_pylist()
         for p in paths:
             assert not p.startswith("/"), f"Path should be relative: {p}"
 
     def test_all_doc_ids_hex32(self, case_root: Path, data_dir: Path):
         run_discovery_and_registration(case_root, data_dir, run_id="hex32chk")
-        table = pq.read_table(data_dir / "docs.parquet")
+        table = pq.read_table(get_ingestion_run_output_dir(data_dir, "hex32chk") / "docs.parquet")
         for doc_id in table.column("doc_id").to_pylist():
             assert len(doc_id) == 32
             assert all(c in "0123456789abcdef" for c in doc_id)
 
     def test_file_sizes_positive(self, case_root: Path, data_dir: Path):
         run_discovery_and_registration(case_root, data_dir, run_id="fsize")
-        table = pq.read_table(data_dir / "docs.parquet")
+        table = pq.read_table(get_ingestion_run_output_dir(data_dir, "fsize") / "docs.parquet")
         for size in table.column("file_size").to_pylist():
             assert size > 0
 
     def test_extracted_at_is_utc(self, case_root: Path, data_dir: Path):
         run_discovery_and_registration(case_root, data_dir, run_id="utcchk")
-        table = pq.read_table(data_dir / "docs.parquet")
+        table = pq.read_table(get_ingestion_run_output_dir(data_dir, "utcchk") / "docs.parquet")
         # PyArrow timestamp type should have tz="UTC"
         ts_field = table.schema.field("extracted_at")
         assert str(ts_field.type) == "timestamp[us, tz=UTC]"
