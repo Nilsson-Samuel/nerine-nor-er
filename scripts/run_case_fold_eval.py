@@ -30,17 +30,24 @@ from src.evaluation.run import (
 )
 from src.matching.fold_training import (
     AGGREGATE_FOLD_REPORTS_FILENAME,
+    AGGREGATE_FOLD_REPORTS_MARKDOWN_FILENAME,
     AGGREGATE_FOLD_SUMMARY_FILENAME,
     DEFAULT_FOLD_MODEL_VERSION_PREFIX,
     FOLD_METRICS_FILENAME,
+    FOLD_SUMMARY_MARKDOWN_FILENAME,
     FOLD_SUMMARY_FILENAME,
     FoldTrainingSource,
     build_fold_summary_row,
     train_and_save_fold_model,
     write_fold_metrics_csv,
+    write_aggregate_fold_reports_markdown,
+    write_fold_summary_markdown,
     write_fold_summary_json,
 )
-from src.shared.paths import get_evaluation_report_path
+from src.shared.paths import (
+    get_evaluation_markdown_report_path,
+    get_evaluation_report_path,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -364,11 +371,17 @@ def run_fold(
             "evaluation_report_path": str(
                 get_evaluation_report_path(held_out_run.data_dir, held_out_run.run_id)
             ),
+            "evaluation_markdown_report_path": str(
+                get_evaluation_markdown_report_path(
+                    held_out_run.data_dir, held_out_run.run_id
+                )
+            ),
         },
         "summary_row": summary_row,
     }
     write_fold_summary_json(fold_dir / FOLD_SUMMARY_FILENAME, fold_summary)
     write_fold_metrics_csv(fold_dir / FOLD_METRICS_FILENAME, [summary_row])
+    write_fold_summary_markdown(fold_dir / FOLD_SUMMARY_MARKDOWN_FILENAME, fold_summary)
     return summary_row
 
 
@@ -392,6 +405,10 @@ def main() -> int:
         for fold in selected_folds
     ]
     write_fold_metrics_csv(output_root / AGGREGATE_FOLD_REPORTS_FILENAME, summary_rows)
+    write_aggregate_fold_reports_markdown(
+        output_root / AGGREGATE_FOLD_REPORTS_MARKDOWN_FILENAME,
+        summary_rows,
+    )
     write_fold_summary_json(
         output_root / AGGREGATE_FOLD_SUMMARY_FILENAME,
         {

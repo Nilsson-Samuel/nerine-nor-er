@@ -14,10 +14,13 @@ import pytest
 from scripts.run_case_fold_eval import _parse_fold_configs
 from src.matching.fold_training import (
     FoldTrainingSource,
+    build_macro_average_row,
     build_fold_summary_row,
     load_multi_run_labeled_feature_matrix,
     train_and_save_fold_model,
+    write_aggregate_fold_reports_markdown,
     write_fold_metrics_csv,
+    write_fold_summary_markdown,
 )
 from src.matching.run import run_features
 from src.shared.paths import get_evaluation_labels_path
@@ -170,10 +173,14 @@ def test_fold_summary_row_and_csv_capture_key_metrics(tmp_path: Path) -> None:
             "evaluation_candidate_pair_count": 28,
         },
         "metrics": {
+            "pairwise_precision": 0.7,
+            "pairwise_recall": 0.54,
             "pairwise_f1": 0.61,
-            "bcubed_f1": 0.72,
             "ari": 0.33,
             "nmi": 0.44,
+            "bcubed_precision": 0.74,
+            "bcubed_recall": 0.7,
+            "bcubed_f1": 0.72,
         },
         "stage_metrics": {
             "blocking": {"gold_positive_pair_recall": 0.9},
@@ -202,7 +209,11 @@ def test_fold_summary_row_and_csv_capture_key_metrics(tmp_path: Path) -> None:
     csv_rows = pl.read_csv(csv_path).to_dicts()
 
     assert row["train_cases"] == ["case_alpha", "case_gamma"]
+    assert row["pairwise_precision"] == 0.7
+    assert row["pairwise_recall"] == 0.54
     assert row["pairwise_f1"] == 0.61
+    assert row["bcubed_precision"] == 0.74
+    assert row["bcubed_recall"] == 0.7
     assert row["blocking_positive_pair_recall"] == 0.9
     assert csv_rows == [
         {
@@ -215,16 +226,72 @@ def test_fold_summary_row_and_csv_capture_key_metrics(tmp_path: Path) -> None:
             "train_positive_rate": 0.19,
             "evaluation_entity_count": 14,
             "evaluation_candidate_pair_count": 28,
+            "pairwise_precision": 0.7,
+            "pairwise_recall": 0.54,
             "pairwise_f1": 0.61,
-            "bcubed_f1": 0.72,
             "ari": 0.33,
             "nmi": 0.44,
+            "bcubed_precision": 0.74,
+            "bcubed_recall": 0.7,
+            "bcubed_f1": 0.72,
             "blocking_positive_pair_recall": 0.9,
             "matching_pairwise_precision": 0.8,
             "matching_pairwise_recall": 0.5,
             "matching_pairwise_f1": 0.62,
         }
     ]
+
+
+def test_fold_markdown_writers_include_full_metric_surface(tmp_path: Path) -> None:
+    row = {
+        "fold_name": "fold_demo",
+        "held_out_case": "case_beta",
+        "train_cases": ["case_alpha", "case_gamma"],
+        "train_case_count": 2,
+        "test_run_id": "abc123",
+        "train_labeled_row_count": 42,
+        "train_positive_rate": 0.19,
+        "evaluation_entity_count": 14,
+        "evaluation_candidate_pair_count": 28,
+        "pairwise_precision": 0.7,
+        "pairwise_recall": 0.54,
+        "pairwise_f1": 0.61,
+        "ari": 0.33,
+        "nmi": 0.44,
+        "bcubed_precision": 0.74,
+        "bcubed_recall": 0.7,
+        "bcubed_f1": 0.72,
+        "blocking_positive_pair_recall": 0.9,
+        "matching_pairwise_precision": 0.8,
+        "matching_pairwise_recall": 0.5,
+        "matching_pairwise_f1": 0.62,
+    }
+    payload = {
+        "fold_name": "fold_demo",
+        "held_out_case": "case_beta",
+        "train_cases": ["case_alpha", "case_gamma"],
+        "training": {"training_metadata": {"source_count": 2}},
+        "held_out_run": {
+            "evaluation_report_path": "/tmp/fold_demo/evaluation_report.json",
+            "evaluation_markdown_report_path": "/tmp/fold_demo/evaluation_report.md",
+        },
+        "summary_row": row,
+    }
+
+    fold_markdown_path = tmp_path / "fold_summary.md"
+    aggregate_markdown_path = tmp_path / "fold_reports.md"
+    write_fold_summary_markdown(fold_markdown_path, payload)
+    write_aggregate_fold_reports_markdown(aggregate_markdown_path, [row])
+
+    fold_markdown = fold_markdown_path.read_text(encoding="utf-8")
+    aggregate_markdown = aggregate_markdown_path.read_text(encoding="utf-8")
+    macro_row = build_macro_average_row([row])
+
+    assert "## Final Clustering Metrics" in fold_markdown
+    assert "Pairwise precision" in fold_markdown
+    assert "/tmp/fold_demo/evaluation_report.md" in fold_markdown
+    assert "macro_avg" in aggregate_markdown
+    assert f"{macro_row['pairwise_f1']:.3f}" in aggregate_markdown
 
 
 def test_fold_config_rejects_duplicate_train_cases() -> None:

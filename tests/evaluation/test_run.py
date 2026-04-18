@@ -32,6 +32,7 @@ from src.shared import schemas
 from src.shared.paths import (
     get_blocking_run_output_dir,
     get_evaluation_labels_path,
+    get_evaluation_markdown_report_path,
     get_evaluation_report_path,
     get_extraction_run_output_dir,
     get_ingestion_run_output_dir,
@@ -830,12 +831,15 @@ def test_run_evaluation_writes_report_and_labels(tmp_path: Path) -> None:
     )
 
     report_path = get_evaluation_report_path(data_dir, run_id)
+    markdown_report_path = get_evaluation_markdown_report_path(data_dir, run_id)
     labels_path = get_evaluation_labels_path(data_dir, run_id)
     assert report_path.exists()
+    assert markdown_report_path.exists()
     assert labels_path.exists()
     assert shared_labels_path.exists()
 
     persisted = json.loads(report_path.read_text(encoding="utf-8"))
+    markdown_report = markdown_report_path.read_text(encoding="utf-8")
     labels = pq.read_table(labels_path).to_pylist()
     assert persisted["counts"]["gold_mentions"] == 4
     assert persisted["counts"]["evaluation_entities"] == 4
@@ -851,6 +855,9 @@ def test_run_evaluation_writes_report_and_labels(tmp_path: Path) -> None:
     assert len(labels) == 6
     assert {row["label"] for row in labels} == {0, 1}
     assert report["metrics"]["pairwise_f1"] == 0.4
+    assert "## Final Clustering / Resolution Metrics" in markdown_report
+    assert "Pairwise precision" in markdown_report
+    assert "## Regression Checks" in markdown_report
 
 
 def test_run_evaluation_filters_shared_training_labels_by_allowed_doc_ids(

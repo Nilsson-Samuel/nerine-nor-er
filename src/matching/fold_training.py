@@ -22,9 +22,31 @@ from src.shared.paths import get_evaluation_labels_path
 
 FOLD_SUMMARY_FILENAME = "fold_summary.json"
 FOLD_METRICS_FILENAME = "fold_metrics.csv"
+FOLD_SUMMARY_MARKDOWN_FILENAME = "fold_summary.md"
 AGGREGATE_FOLD_REPORTS_FILENAME = "fold_reports.csv"
 AGGREGATE_FOLD_SUMMARY_FILENAME = "fold_reports.json"
+AGGREGATE_FOLD_REPORTS_MARKDOWN_FILENAME = "fold_reports.md"
 DEFAULT_FOLD_MODEL_VERSION_PREFIX = "lightgbm_case_fold"
+FINAL_CLUSTERING_METRIC_FIELDS = (
+    "pairwise_precision",
+    "pairwise_recall",
+    "pairwise_f1",
+    "ari",
+    "nmi",
+    "bcubed_precision",
+    "bcubed_recall",
+    "bcubed_f1",
+)
+FINAL_CLUSTERING_METRIC_LABELS = {
+    "pairwise_precision": "Pairwise precision",
+    "pairwise_recall": "Pairwise recall",
+    "pairwise_f1": "Pairwise F1",
+    "ari": "ARI",
+    "nmi": "NMI",
+    "bcubed_precision": "B-cubed precision",
+    "bcubed_recall": "B-cubed recall",
+    "bcubed_f1": "B-cubed F1",
+}
 
 
 @dataclass(frozen=True)
@@ -212,14 +234,34 @@ def build_fold_summary_row(
         "train_positive_rate": float(training_metadata["positive_rate"]),
         "evaluation_entity_count": int(metric_scope["evaluation_entity_count"]),
         "evaluation_candidate_pair_count": int(metric_scope["evaluation_candidate_pair_count"]),
+        "pairwise_precision": float(metrics["pairwise_precision"]),
+        "pairwise_recall": float(metrics["pairwise_recall"]),
         "pairwise_f1": float(metrics["pairwise_f1"]),
-        "bcubed_f1": float(metrics["bcubed_f1"]),
         "ari": float(metrics["ari"]),
         "nmi": float(metrics["nmi"]),
+        "bcubed_precision": float(metrics["bcubed_precision"]),
+        "bcubed_recall": float(metrics["bcubed_recall"]),
+        "bcubed_f1": float(metrics["bcubed_f1"]),
         "blocking_positive_pair_recall": float(blocking_recall),
         "matching_pairwise_precision": float(matching["precision"]),
         "matching_pairwise_recall": float(matching["recall"]),
         "matching_pairwise_f1": float(matching["f1"]),
+    }
+
+
+def build_macro_average_row(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Compute macro averages for the primary final clustering metrics."""
+    if not rows:
+        raise ValueError("macro average requires at least one fold row")
+
+    averages = {
+        metric_name: sum(float(row[metric_name]) for row in rows) / len(rows)
+        for metric_name in FINAL_CLUSTERING_METRIC_FIELDS
+    }
+    return {
+        "fold_name": "macro_avg",
+        "held_out_case": f"{len(rows)} folds",
+        **averages,
     }
 
 
@@ -253,3 +295,208 @@ def write_fold_metrics_csv(path: Path | str, rows: list[dict[str, Any]]) -> None
         writer.writeheader()
         for row in rows:
             writer.writerow({key: _csv_cell(value) for key, value in row.items()})
+
+
+def write_fold_summary_markdown(path: Path | str, payload: dict[str, Any]) -> None:
+    """Write one human-readable Markdown report for a held-out fold."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    summary_row = payload["summary_row"]
+    held_out_run = payload["held_out_run"]
+    training = payload["training"]["training_metadata"]
+    evaluation_report_paths = [
+        f"`{held_out_run['evaluation_report_path']}`",
+        f"`{held_out_run['evaluation_markdown_report_path']}`",
+    ]
+    lines = [
+        f"# Fold Summary: {payload['fold_name']}",
+        "",
+        f"- Held-out case: `{payload['held_out_case']}`",
+        f"- Train cases: `{', '.join(payload['train_cases'])}`",
+        f"- Train labeled rows: {summary_row['train_labeled_row_count']}",
+        f"- Train positive rate: {_format_markdown_metric(summary_row['train_positive_rate'])}",
+        f"- Evaluation entities: {summary_row['evaluation_entity_count']}",
+        (
+            "- Evaluation candidate pairs: "
+            f"{summary_row['evaluation_candidate_pair_count']}"
+        ),
+        "",
+        "## Final Clustering Metrics",
+        "",
+        _markdown_table(
+            ["Metric", "Value"],
+            [
+                [FINAL_CLUSTERING_METRIC_LABELS[name], _format_markdown_metric(summary_row[name])]
+                for name in FINAL_CLUSTERING_METRIC_FIELDS
+            ],
+        ),
+        "",
+        "## Stage Context",
+        "",
+        _markdown_table(
+            ["Signal", "Value"],
+            [
+                [
+                    "Blocking gold-positive-pair recall",
+                    _format_markdown_metric(summary_row["blocking_positive_pair_recall"]),
+                ],
+                [
+                    "Matching pairwise precision",
+                    _format_markdown_metric(summary_row["matching_pairwise_precision"]),
+                ],
+                [
+                    "Matching pairwise recall",
+                    _format_markdown_metric(summary_row["matching_pairwise_recall"]),
+                ],
+                [
+                    "Matching pairwise F1",
+                    _format_markdown_metric(summary_row["matching_pairwise_f1"]),
+                ],
+            ],
+        ),
+        "",
+        "## Training Context",
+        "",
+        _markdown_table(
+            ["Item", "Value"],
+            [
+                ["Train case count", summary_row["train_case_count"]],
+                ["Label-source run count", training["source_count"]],
+                ["Held-out run ID", f"`{summary_row['test_run_id']}`"],
+            ],
+        ),
+        "",
+        "## Detailed Reports",
+        "",
+        f"- JSON report: {evaluation_report_paths[0]}",
+        f"- Markdown report: {evaluation_report_paths[1]}",
+        "",
+        "## Interpretation",
+        "",
+        _interpret_fold_summary(summary_row),
+        "",
+    ]
+    path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def write_aggregate_fold_reports_markdown(
+    path: Path | str,
+    rows: list[dict[str, Any]],
+) -> None:
+    """Write one Markdown overview across all held-out folds."""
+    if not rows:
+        raise ValueError("aggregate fold Markdown requires at least one row")
+
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    macro_row = build_macro_average_row(rows)
+    lines = [
+        "# Case-Fold Evaluation Overview",
+        "",
+        "## Fold Metrics",
+        "",
+        _markdown_table(
+            [
+                "Fold",
+                "Held-out case",
+                "Pairwise P",
+                "Pairwise R",
+                "Pairwise F1",
+                "ARI",
+                "NMI",
+                "B-cubed P",
+                "B-cubed R",
+                "B-cubed F1",
+                "Blocking recall",
+                "Matching P",
+                "Matching R",
+                "Matching F1",
+            ],
+            [
+                [
+                    row["fold_name"],
+                    row["held_out_case"],
+                    _format_markdown_metric(row["pairwise_precision"]),
+                    _format_markdown_metric(row["pairwise_recall"]),
+                    _format_markdown_metric(row["pairwise_f1"]),
+                    _format_markdown_metric(row["ari"]),
+                    _format_markdown_metric(row["nmi"]),
+                    _format_markdown_metric(row["bcubed_precision"]),
+                    _format_markdown_metric(row["bcubed_recall"]),
+                    _format_markdown_metric(row["bcubed_f1"]),
+                    _format_markdown_metric(row["blocking_positive_pair_recall"]),
+                    _format_markdown_metric(row["matching_pairwise_precision"]),
+                    _format_markdown_metric(row["matching_pairwise_recall"]),
+                    _format_markdown_metric(row["matching_pairwise_f1"]),
+                ]
+                for row in rows
+            ]
+            + [
+                [
+                    macro_row["fold_name"],
+                    macro_row["held_out_case"],
+                    _format_markdown_metric(macro_row["pairwise_precision"]),
+                    _format_markdown_metric(macro_row["pairwise_recall"]),
+                    _format_markdown_metric(macro_row["pairwise_f1"]),
+                    _format_markdown_metric(macro_row["ari"]),
+                    _format_markdown_metric(macro_row["nmi"]),
+                    _format_markdown_metric(macro_row["bcubed_precision"]),
+                    _format_markdown_metric(macro_row["bcubed_recall"]),
+                    _format_markdown_metric(macro_row["bcubed_f1"]),
+                    "-",
+                    "-",
+                    "-",
+                    "-",
+                ]
+            ],
+        ),
+        "",
+    ]
+    path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def _format_markdown_metric(value: Any) -> str:
+    """Format numeric metrics for compact Markdown tables."""
+    if isinstance(value, float):
+        return f"{value:.3f}"
+    return str(value)
+
+
+def _markdown_table(headers: list[str], rows: list[list[Any]]) -> str:
+    """Build one simple GitHub-flavored Markdown table."""
+    table = [
+        "| " + " | ".join(headers) + " |",
+        "| " + " | ".join(["---"] * len(headers)) + " |",
+    ]
+    for row in rows:
+        table.append("| " + " | ".join(str(cell) for cell in row) + " |")
+    return "\n".join(table)
+
+
+def _interpret_fold_summary(summary_row: dict[str, Any]) -> str:
+    """Generate one short interpretation line from the fold metrics."""
+    blocking_recall = float(summary_row["blocking_positive_pair_recall"])
+    matching_precision = float(summary_row["matching_pairwise_precision"])
+    matching_recall = float(summary_row["matching_pairwise_recall"])
+    pairwise_precision = float(summary_row["pairwise_precision"])
+    pairwise_recall = float(summary_row["pairwise_recall"])
+
+    if blocking_recall >= 0.9 and pairwise_precision < pairwise_recall:
+        return (
+            "Blocking stayed high, while final precision lagged recall. "
+            "That points to over-merging after candidate generation."
+        )
+    if blocking_recall < 0.8:
+        return (
+            "Blocking recall dropped early, so missed candidate pairs are likely "
+            "limiting the final clustering result."
+        )
+    if matching_recall + 0.1 < matching_precision:
+        return (
+            "Matching stayed conservative relative to recall, which suggests "
+            "under-linking before resolution."
+        )
+    return (
+        "Blocking and matching stayed reasonably balanced, so this fold is best "
+        "read through the final clustering metrics rather than a single stage issue."
+    )
