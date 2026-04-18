@@ -25,6 +25,7 @@ import pytest
 
 from src.blocking.faiss_index import build_hnsw_index, query_neighbors
 from src.blocking.writer import write_candidate_pairs, write_handoff_manifest
+from src.shared.paths import get_blocking_run_output_dir
 from src.shared.schemas import HANDOFF_MANIFEST_KEYS, validate_contract_rules
 
 
@@ -92,7 +93,7 @@ class TestWriteCandidatePairs:
         count = write_candidate_pairs(candidates, "run_test", tmp_path, con)
         assert count == 1
 
-        table = pq.read_table(tmp_path / "candidate_pairs.parquet")
+        table = pq.read_table(get_blocking_run_output_dir(tmp_path, "run_test") / "candidate_pairs.parquet")
         errors = validate_contract_rules(table, "candidate_pairs")
         assert errors == []
 
@@ -110,7 +111,7 @@ class TestWriteCandidatePairs:
         count = write_candidate_pairs(candidates, "run_test", tmp_path, con)
         assert count == 1
 
-        table = pq.read_table(tmp_path / "candidate_pairs.parquet")
+        table = pq.read_table(get_blocking_run_output_dir(tmp_path, "run_test") / "candidate_pairs.parquet")
         errors = validate_contract_rules(table, "candidate_pairs")
         assert errors == []
 
@@ -141,7 +142,7 @@ class TestWriteHandoffManifest:
             entity_count=100,
             candidate_count=500,
             entity_types_present=["ORG", "PER"],
-            out_dir=tmp_path,
+            data_dir=tmp_path,
         )
         manifest = json.loads(path.read_text())
         for key in HANDOFF_MANIFEST_KEYS:
@@ -153,7 +154,7 @@ class TestWriteHandoffManifest:
             entity_count=100,
             candidate_count=500,
             entity_types_present=["PER", "ORG"],
-            out_dir=tmp_path,
+            data_dir=tmp_path,
             embedding_dim=768,
             k=100,
         )
@@ -172,7 +173,7 @@ class TestWriteHandoffManifest:
             entity_count=10,
             candidate_count=5,
             entity_types_present=["PER"],
-            out_dir=tmp_path,
+            data_dir=tmp_path,
         )
         manifest = json.loads(path.read_text())
         # Should be parseable ISO 8601

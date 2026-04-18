@@ -12,7 +12,6 @@ import polars as pl
 import pytest
 
 from scripts.run_case_fold_eval import _parse_fold_configs
-from src.evaluation.run import get_evaluation_labels_path
 from src.matching.fold_training import (
     FoldTrainingSource,
     build_fold_summary_row,
@@ -21,6 +20,7 @@ from src.matching.fold_training import (
     write_fold_metrics_csv,
 )
 from src.matching.run import run_features
+from src.shared.paths import get_evaluation_labels_path
 from src.synthetic.build_matching_dataset import build_matching_dataset, load_labeled_feature_matrix
 
 

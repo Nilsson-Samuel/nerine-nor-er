@@ -12,6 +12,7 @@ import duckdb
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from src.shared.paths import get_extraction_run_output_dir
 from src.shared.schemas import ENTITIES_SCHEMA
 
 logger = logging.getLogger(__name__)
@@ -51,7 +52,9 @@ def write_entities_parquet(
         Path to the written entities.parquet file.
     """
     data_dir = Path(data_dir)
-    entities_path = data_dir / "entities.parquet"
+    out_dir = get_extraction_run_output_dir(data_dir, run_id)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    entities_path = out_dir / "entities.parquet"
 
     if not entities:
         logger.info("No entities to write.")

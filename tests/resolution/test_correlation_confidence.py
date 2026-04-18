@@ -33,6 +33,7 @@ from src.resolution.run import (
     run_resolution,
 )
 from src.shared import schemas
+from src.shared.paths import get_extraction_run_output_dir
 
 
 def _hex32(number: int) -> str:
@@ -212,9 +213,11 @@ def test_run_resolution_emits_cluster_confidence_and_suspicion_diagnostics(
     tmp_path: Path,
 ) -> None:
     a, b, c, d, e, f = (_hex32(index) for index in range(1, 7))
+    entities_path = get_extraction_run_output_dir(tmp_path, "run_resolution") / "entities.parquet"
+    entities_path.parent.mkdir(parents=True, exist_ok=True)
     pq.write_table(
         _build_entities_table("run_resolution", [a, b, c, d, e, f]),
-        tmp_path / "entities.parquet",
+        entities_path,
     )
     scored_pairs_path = get_scored_pairs_output_path(tmp_path, "run_resolution")
     scored_pairs_path.parent.mkdir(parents=True, exist_ok=True)

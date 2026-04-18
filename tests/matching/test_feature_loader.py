@@ -14,9 +14,14 @@ import duckdb
 import pyarrow.parquet as pq
 import pytest
 
-from src.shared.fixtures import DEFAULT_RUN_ID, write_mock_handoff
-from src.matching.features import load_pairs_with_names
+from src.matching.features import (
+    PAIR_METADATA_COLUMNS,
+    load_pairs_with_metadata,
+    load_pairs_with_names,
+)
 from src.matching.writer import write_string_features
+from src.shared.fixtures import DEFAULT_RUN_ID, write_mock_handoff
+from src.shared.paths import get_blocking_run_output_dir, get_extraction_run_output_dir
 
 
 # The mock fixture always produces exactly 2 candidate pairs: one PER, one ORG.
@@ -92,19 +97,29 @@ def test_loader_unknown_run_id_returns_empty(handoff_dir: Path) -> None:
     assert set(df.columns) == _EXPECTED_COLUMNS
 
 
+def test_metadata_loader_missing_run_returns_empty_metadata_schema(
+    handoff_dir: Path,
+) -> None:
+    df = load_pairs_with_metadata(handoff_dir, "missing_run")
+
+    assert df.is_empty()
+    assert df.columns == PAIR_METADATA_COLUMNS
+
+
 # ---------------------------------------------------------------------------
 # Pre-registered DuckDB connection
 # ---------------------------------------------------------------------------
 
 def test_loader_accepts_existing_connection(handoff_dir: Path) -> None:
     # Pre-register views and pass the connection directly.
+    entities_path = get_extraction_run_output_dir(handoff_dir, DEFAULT_RUN_ID) / "entities.parquet"
+    candidate_pairs_path = get_blocking_run_output_dir(handoff_dir, DEFAULT_RUN_ID) / "candidate_pairs.parquet"
     con = duckdb.connect()
     con.execute(
-        f"CREATE VIEW entities AS SELECT * FROM read_parquet('{handoff_dir / 'entities.parquet'}')"
+        f"CREATE VIEW entities AS SELECT * FROM read_parquet('{entities_path}')"
     )
     con.execute(
-        f"CREATE VIEW candidate_pairs AS SELECT * FROM read_parquet"
-        f"('{handoff_dir / 'candidate_pairs.parquet'}')"
+        f"CREATE VIEW candidate_pairs AS SELECT * FROM read_parquet('{candidate_pairs_path}')"
     )
     df = load_pairs_with_names(con, DEFAULT_RUN_ID)
     assert len(df) == _EXPECTED_PAIR_COUNT

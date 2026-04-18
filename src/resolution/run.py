@@ -11,6 +11,7 @@ import polars as pl
 import pyarrow.parquet as pq
 
 from src.matching.writer import get_scored_pairs_output_path
+from src.shared.paths import get_extraction_run_output_dir
 from src.resolution.canonicalization import (
     build_cluster_records,
     build_resolved_entity_rows,
@@ -55,7 +56,7 @@ PROGRESS_LOG_COMPONENT_INTERVAL = 25
 
 def _load_entities_frame(data_dir: Path | str, run_id: str) -> pl.DataFrame:
     """Load one run from entities.parquet for clustering and lineage joins."""
-    table = pq.read_table(Path(data_dir) / "entities.parquet")
+    table = pq.read_table(get_extraction_run_output_dir(data_dir, run_id) / "entities.parquet")
     errors = schemas.validate_contract_rules(table, "entities")
     if errors:
         raise ValueError(f"entities failed contract validation: {errors}")

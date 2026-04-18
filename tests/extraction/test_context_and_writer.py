@@ -22,6 +22,7 @@ import pytest
 
 from src.extraction.context import extract_context
 from src.extraction.writer import make_entity_id, write_entities_parquet
+from src.shared.paths import get_extraction_run_output_dir, get_ingestion_run_output_dir
 from src.shared.schemas import (
     CHUNKS_SCHEMA,
     ENTITIES_SCHEMA,
@@ -272,7 +273,9 @@ def _write_synthetic_chunks(data_dir: Path, run_id: str, con: duckdb.DuckDBPyCon
         for field in CHUNKS_SCHEMA:
             arrays[field.name].append(row[field.name])
     table = pa.table(arrays, schema=CHUNKS_SCHEMA)
-    chunks_path = data_dir / "chunks.parquet"
+    ingestion_dir = get_ingestion_run_output_dir(data_dir, run_id)
+    ingestion_dir.mkdir(parents=True, exist_ok=True)
+    chunks_path = ingestion_dir / "chunks.parquet"
     pq.write_table(table, chunks_path)
     con.execute(f"CREATE OR REPLACE TABLE chunks AS SELECT * FROM '{chunks_path}'")
     return chunk_text
@@ -296,18 +299,138 @@ def _write_chunk_rows(
             "source_unit_kind": "pdf_page",
             "page_num": index,
         })
-
     arrays = {field.name: [] for field in CHUNKS_SCHEMA}
     for row in rows:
         for field in CHUNKS_SCHEMA:
             arrays[field.name].append(row[field.name])
-
-    chunks_path = data_dir / "chunks.parquet"
-    pq.write_table(pa.table(arrays, schema=CHUNKS_SCHEMA), chunks_path)
+    table = pa.table(arrays, schema=CHUNKS_SCHEMA)
+    ingestion_dir = get_ingestion_run_output_dir(data_dir, run_id)
+    ingestion_dir.mkdir(parents=True, exist_ok=True)
+    chunks_path = ingestion_dir / "chunks.parquet"
+    pq.write_table(table, chunks_path)
     con.execute(f"CREATE OR REPLACE TABLE chunks AS SELECT * FROM '{chunks_path}'")
+class TestFullPipeline:
+    """Integration tests using run_extraction on synthetic chunks."""
+
+    def test_imports_cleanly(self):
+        """Verify the full pipeline can be imported without errors."""
+        from src.extraction.run import run_extraction  # noqa: F401
+
+    def test_run_extraction_produces_entities_parquet(self, data_dir, con):
+        from src.extraction.run import run_extraction
+        run_id = "integrationtest"
+        _write_synthetic_chunks(data_dir, run_id, con)
+        run_extraction(data_dir, run_id, con)
+        entities_path = get_extraction_run_output_dir(data_dir, run_id) / "entities.parquet"
+        assert entities_path.exists()
+
+    def test_entities_schema_valid(self, data_dir, con):
+        from src.extraction.run import run_extraction
+        run_id = "integrationtest"
+        _write_synthetic_chunks(data_dir, run_id, con)
+        run_extraction(data_dir, run_id, con)
+        entities_path = get_extraction_run_output_dir(data_dir, run_id) / "entities.parquet"
+        table = pq.read_table(entities_path)
+        errors = validate(table, ENTITIES_SCHEMA)
+        assert errors == [], errors
+
+    def test_entities_contract_valid(self, data_dir, con):
+        from src.extraction.run import run_extraction
+        run_id = "integrationtest"
+        _write_synthetic_chunks(data_dir, run_id, con)
+        run_extraction(data_dir, run_id, con)
+        entities_path = get_extraction_run_output_dir(data_dir, run_id) / "entities.parquet"
+        table = pq.read_table(entities_path)
+        errors = validate_contract_rules(table, "entities")
+        assert errors == [], errors
+
+    def test_all_entities_have_context(self, data_dir, con):
+        from src.extraction.run import run_extraction
+        run_id = "integrationtest"
+        _write_synthetic_chunks(data_dir, run_id, con)
+        run_extraction(data_dir, run_id, con)
+        entities_path = get_extraction_run_output_dir(data_dir, run_id) / "entities.parquet"
+        table = pq.read_table(entities_path)
+        for row in table.to_pylist():
+            assert row["context"], f"Empty context for entity {row['entity_id']}"
+
+    def test_primary_span_in_positions(self, data_dir, con):
+        from src.extraction.run import run_extraction
+        run_id = "integrationtest"
+        _write_synthetic_chunks(data_dir, run_id, con)
+        run_extraction(data_dir, run_id, con)
+        entities_path = get_extraction_run_output_dir(data_dir, run_id) / "entities.parquet"
+        table = pq.read_table(entities_path)
+        for row in table.to_pylist():
+            positions = row["positions"]
+            assert any(
+                p["chunk_id"] == row["chunk_id"]
+                and p["char_start"] == row["char_start"]
+                and p["char_end"] == row["char_end"]
+                for p in positions
+            ), f"Primary span missing from positions for entity {row['entity_id']}"
+
+    def test_count_equals_positions_length(self, data_dir, con):
+        from src.extraction.run import run_extraction
+        run_id = "integrationtest"
+        _write_synthetic_chunks(data_dir, run_id, con)
+        run_extraction(data_dir, run_id, con)
+        entities_path = get_extraction_run_output_dir(data_dir, run_id) / "entities.parquet"
+        table = pq.read_table(entities_path)
+        for row in table.to_pylist():
+            assert row["count"] == len(row["positions"])
+
+    def test_duckdb_entities_registered(self, data_dir, con):
+        from src.extraction.run import run_extraction
+        run_id = "integrationtest"
+        _write_synthetic_chunks(data_dir, run_id, con)
+        run_extraction(data_dir, run_id, con)
+        count = con.execute("SELECT COUNT(*) FROM entities").fetchone()[0]
+        assert count > 0
+
+    def test_no_chunks_returns_run_id(self, data_dir, con):
+        from src.extraction.run import run_extraction
+        result = run_extraction(data_dir, "emptyrun", con)
+        assert result == "emptyrun"
+        entities_path = get_extraction_run_output_dir(data_dir, "emptyrun") / "entities.parquet"
+        assert not entities_path.exists()
+
+    def test_returns_run_id(self, data_dir, con):
+        from src.extraction.run import run_extraction
+        run_id = "myrun42"
+        _write_synthetic_chunks(data_dir, run_id, con)
+        result = run_extraction(data_dir, run_id, con)
+        assert result == run_id
+
+    def test_deterministic_across_runs(self, data_dir, con):
+        """Same input should produce identical entity IDs."""
+        from src.extraction.run import run_extraction
+        run_id = "dettest"
+
+        # First run
+        dir1 = data_dir / "run1"
+        dir1.mkdir()
+        con1 = duckdb.connect()
+        _write_synthetic_chunks(dir1, run_id, con1)
+        run_extraction(dir1, run_id, con1)
+        t1 = pq.read_table(get_extraction_run_output_dir(dir1, run_id) / "entities.parquet")
+
+        # Second run
+        dir2 = data_dir / "run2"
+        dir2.mkdir()
+        con2 = duckdb.connect()
+        _write_synthetic_chunks(dir2, run_id, con2)
+        run_extraction(dir2, run_id, con2)
+        t2 = pq.read_table(get_extraction_run_output_dir(dir2, run_id) / "entities.parquet")
+
+        ids1 = sorted(t1.column("entity_id").to_pylist())
+        ids2 = sorted(t2.column("entity_id").to_pylist())
+        assert ids1 == ids2
 
 
 class TestMentionExtractionProgressLogs:
+    """Mention extraction logs start and periodic progress for long runs."""
+
     def test_logs_start_and_periodic_progress_for_long_runs(
         self,
         data_dir: Path,
@@ -365,115 +488,3 @@ class TestMentionExtractionProgressLogs:
 
         assert "Extraction start: 5 chunks" in caplog.text
         assert "Extraction progress:" not in caplog.text
-
-
-class TestFullPipeline:
-    """Integration tests using run_extraction on synthetic chunks."""
-
-    def test_imports_cleanly(self):
-        """Verify the full pipeline can be imported without errors."""
-        from src.extraction.run import run_extraction  # noqa: F401
-
-    def test_run_extraction_produces_entities_parquet(self, data_dir, con):
-        from src.extraction.run import run_extraction
-        run_id = "integrationtest"
-        _write_synthetic_chunks(data_dir, run_id, con)
-        run_extraction(data_dir, run_id, con)
-        assert (data_dir / "entities.parquet").exists()
-
-    def test_entities_schema_valid(self, data_dir, con):
-        from src.extraction.run import run_extraction
-        run_id = "integrationtest"
-        _write_synthetic_chunks(data_dir, run_id, con)
-        run_extraction(data_dir, run_id, con)
-        table = pq.read_table(data_dir / "entities.parquet")
-        errors = validate(table, ENTITIES_SCHEMA)
-        assert errors == [], errors
-
-    def test_entities_contract_valid(self, data_dir, con):
-        from src.extraction.run import run_extraction
-        run_id = "integrationtest"
-        _write_synthetic_chunks(data_dir, run_id, con)
-        run_extraction(data_dir, run_id, con)
-        table = pq.read_table(data_dir / "entities.parquet")
-        errors = validate_contract_rules(table, "entities")
-        assert errors == [], errors
-
-    def test_all_entities_have_context(self, data_dir, con):
-        from src.extraction.run import run_extraction
-        run_id = "integrationtest"
-        _write_synthetic_chunks(data_dir, run_id, con)
-        run_extraction(data_dir, run_id, con)
-        table = pq.read_table(data_dir / "entities.parquet")
-        for row in table.to_pylist():
-            assert row["context"], f"Empty context for entity {row['entity_id']}"
-
-    def test_primary_span_in_positions(self, data_dir, con):
-        from src.extraction.run import run_extraction
-        run_id = "integrationtest"
-        _write_synthetic_chunks(data_dir, run_id, con)
-        run_extraction(data_dir, run_id, con)
-        table = pq.read_table(data_dir / "entities.parquet")
-        for row in table.to_pylist():
-            positions = row["positions"]
-            assert any(
-                p["chunk_id"] == row["chunk_id"]
-                and p["char_start"] == row["char_start"]
-                and p["char_end"] == row["char_end"]
-                for p in positions
-            ), f"Primary span missing from positions for entity {row['entity_id']}"
-
-    def test_count_equals_positions_length(self, data_dir, con):
-        from src.extraction.run import run_extraction
-        run_id = "integrationtest"
-        _write_synthetic_chunks(data_dir, run_id, con)
-        run_extraction(data_dir, run_id, con)
-        table = pq.read_table(data_dir / "entities.parquet")
-        for row in table.to_pylist():
-            assert row["count"] == len(row["positions"])
-
-    def test_duckdb_entities_registered(self, data_dir, con):
-        from src.extraction.run import run_extraction
-        run_id = "integrationtest"
-        _write_synthetic_chunks(data_dir, run_id, con)
-        run_extraction(data_dir, run_id, con)
-        count = con.execute("SELECT COUNT(*) FROM entities").fetchone()[0]
-        assert count > 0
-
-    def test_no_chunks_returns_run_id(self, data_dir, con):
-        from src.extraction.run import run_extraction
-        result = run_extraction(data_dir, "emptyrun", con)
-        assert result == "emptyrun"
-        assert not (data_dir / "entities.parquet").exists()
-
-    def test_returns_run_id(self, data_dir, con):
-        from src.extraction.run import run_extraction
-        run_id = "myrun42"
-        _write_synthetic_chunks(data_dir, run_id, con)
-        result = run_extraction(data_dir, run_id, con)
-        assert result == run_id
-
-    def test_deterministic_across_runs(self, data_dir, con):
-        """Same input should produce identical entity IDs."""
-        from src.extraction.run import run_extraction
-        run_id = "dettest"
-
-        # First run
-        dir1 = data_dir / "run1"
-        dir1.mkdir()
-        con1 = duckdb.connect()
-        _write_synthetic_chunks(dir1, run_id, con1)
-        run_extraction(dir1, run_id, con1)
-        t1 = pq.read_table(dir1 / "entities.parquet")
-
-        # Second run
-        dir2 = data_dir / "run2"
-        dir2.mkdir()
-        con2 = duckdb.connect()
-        _write_synthetic_chunks(dir2, run_id, con2)
-        run_extraction(dir2, run_id, con2)
-        t2 = pq.read_table(dir2 / "entities.parquet")
-
-        ids1 = sorted(t1.column("entity_id").to_pylist())
-        ids2 = sorted(t2.column("entity_id").to_pylist())
-        assert ids1 == ids2

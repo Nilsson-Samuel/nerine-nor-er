@@ -13,6 +13,7 @@ import duckdb
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from src.shared.paths import get_blocking_run_output_dir
 from src.shared.schemas import CANDIDATE_PAIRS_SCHEMA, validate_contract_rules
 
 logger = logging.getLogger(__name__)
@@ -21,7 +22,7 @@ logger = logging.getLogger(__name__)
 def write_candidate_pairs(
     candidates: list[dict],
     run_id: str,
-    out_dir: Path,
+    data_dir: Path,
     con: duckdb.DuckDBPyConnection,
 ) -> int:
     """Write candidate_pairs.parquet from unioned candidate records.
@@ -29,12 +30,14 @@ def write_candidate_pairs(
     Args:
         candidates: List of candidate dicts from candidates.union_candidates().
         run_id: Run identifier to stamp on every row.
-        out_dir: Directory to write candidate_pairs.parquet into.
+        data_dir: Pipeline data directory (per-run output dir is computed internally).
         con: DuckDB connection for registering the output table.
 
     Returns:
         Number of candidate pairs written.
     """
+    out_dir = get_blocking_run_output_dir(data_dir, run_id)
+    out_dir.mkdir(parents=True, exist_ok=True)
     rows = []
     for c in candidates:
         rows.append({
@@ -96,7 +99,7 @@ def write_handoff_manifest(
     entity_count: int,
     candidate_count: int,
     entity_types_present: list[str],
-    out_dir: Path,
+    data_dir: Path,
     embedding_dim: int = 768,
     k: int = 100,
 ) -> Path:
@@ -107,13 +110,15 @@ def write_handoff_manifest(
         entity_count: Number of rows in entities.parquet (post-dedup mentions).
         candidate_count: Number of rows in candidate_pairs.parquet.
         entity_types_present: Sorted list of entity types found in this run.
-        out_dir: Directory to write the manifest into.
+        data_dir: Pipeline data directory (per-run output dir is computed internally).
         embedding_dim: Embedding dimensionality (default 768).
         k: FAISS top-k parameter used during blocking.
 
     Returns:
         Path to the written manifest file.
     """
+    out_dir = get_blocking_run_output_dir(data_dir, run_id)
+    out_dir.mkdir(parents=True, exist_ok=True)
     manifest = {
         "schema_version": "1.1",
         "run_id": run_id,

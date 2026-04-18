@@ -28,19 +28,19 @@ from src.evaluation.metrics import (
 from src.ingestion.chunking import CHUNK_OVERLAP
 from src.ingestion.extraction import extract_docx_units, extract_pdf_units
 from src.ingestion.normalization import normalize_text
-from src.matching.writer import (
-    RUN_OUTPUTS_DIRNAME,
-    _encode_run_id_path_segment,
-    get_scored_pairs_output_path,
+from src.matching.writer import get_scored_pairs_output_path
+from src.shared.paths import (
+    get_blocking_run_output_dir,
+    get_evaluation_labels_path,
+    get_evaluation_report_path,
+    get_extraction_run_output_dir,
+    get_ingestion_run_output_dir,
 )
 from src.resolution.writer import get_resolved_entities_output_path
 from src.shared import schemas
 from src.shared.config import PAIR_MATCH_THRESHOLD
 from src.synthetic.build_matching_dataset import LABELS_SCHEMA
 
-EVALUATION_STAGE_DIRNAME = "evaluation"
-EVALUATION_REPORT_FILENAME = "evaluation_report.json"
-LABELS_FILENAME = "labels.parquet"
 DEFAULT_MATCH_THRESHOLD = PAIR_MATCH_THRESHOLD
 DEFAULT_ALLOWED_METRIC_DROP = {
     "pairwise_f1": 0.03,
@@ -88,27 +88,6 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="Optional doc_id allowlist for labels written to --shared-labels-path.",
     )
     return parser.parse_args(argv)
-
-
-def get_evaluation_run_output_dir(data_dir: Path | str, run_id: str) -> Path:
-    """Build the per-run evaluation output directory."""
-    return (
-        Path(data_dir)
-        / RUN_OUTPUTS_DIRNAME
-        / _encode_run_id_path_segment(run_id)
-        / EVALUATION_STAGE_DIRNAME
-    )
-
-
-def get_evaluation_report_path(data_dir: Path | str, run_id: str) -> Path:
-    """Build the per-run evaluation report path."""
-    return get_evaluation_run_output_dir(data_dir, run_id) / EVALUATION_REPORT_FILENAME
-
-
-def get_evaluation_labels_path(data_dir: Path | str, run_id: str) -> Path:
-    """Build the per-run matcher-label bridge path."""
-    return get_evaluation_run_output_dir(data_dir, run_id) / LABELS_FILENAME
-
 
 def _prepare_gold_label_bridge(
     data_dir: Path,
@@ -213,8 +192,6 @@ def write_training_labels_from_gold(
         "candidate_pair_count": int(bridge["candidate_pairs"].height),
         "bridge_summary": dict(bridge["bridge_summary"]),
     }
-
-
 def run_evaluation(
     data_dir: Path | str,
     run_id: str,
@@ -545,7 +522,7 @@ def _load_gold_mentions(gold_path: Path) -> pl.DataFrame:
 
 def _load_docs(data_dir: Path, run_id: str) -> pl.DataFrame:
     """Load and validate docs metadata for one run."""
-    table = pq.read_table(data_dir / "docs.parquet")
+    table = pq.read_table(get_ingestion_run_output_dir(data_dir, run_id) / "docs.parquet")
     errors = schemas.validate_contract_rules(table, "docs")
     if errors:
         raise ValueError(f"docs failed contract validation: {errors}")
@@ -590,7 +567,7 @@ def _remap_gold_doc_ids(
 
 def _load_chunks(data_dir: Path, run_id: str) -> pl.DataFrame:
     """Load and validate chunks for one run."""
-    table = pq.read_table(data_dir / "chunks.parquet")
+    table = pq.read_table(get_ingestion_run_output_dir(data_dir, run_id) / "chunks.parquet")
     errors = schemas.validate_contract_rules(table, "chunks")
     if errors:
         raise ValueError(f"chunks failed contract validation: {errors}")
@@ -692,7 +669,7 @@ def _remap_gold_offsets_to_run_text(
 
 def _load_entities(data_dir: Path, run_id: str) -> pl.DataFrame:
     """Load and validate entities for one run."""
-    table = pq.read_table(data_dir / "entities.parquet")
+    table = pq.read_table(get_extraction_run_output_dir(data_dir, run_id) / "entities.parquet")
     errors = schemas.validate_contract_rules(table, "entities")
     if errors:
         raise ValueError(f"entities failed contract validation: {errors}")
@@ -704,7 +681,7 @@ def _load_entities(data_dir: Path, run_id: str) -> pl.DataFrame:
 
 def _load_candidate_pairs(data_dir: Path, run_id: str) -> pl.DataFrame:
     """Load and validate candidate pairs for one run."""
-    table = pq.read_table(data_dir / "candidate_pairs.parquet")
+    table = pq.read_table(get_blocking_run_output_dir(data_dir, run_id) / "candidate_pairs.parquet")
     errors = schemas.validate_contract_rules(table, "candidate_pairs")
     if errors:
         raise ValueError(f"candidate_pairs failed contract validation: {errors}")
@@ -721,7 +698,7 @@ def _load_candidate_pairs(data_dir: Path, run_id: str) -> pl.DataFrame:
 def _load_scored_pairs(data_dir: Path, run_id: str) -> pl.DataFrame:
     """Load and validate scored pairs for one run."""
     scored_path = get_scored_pairs_output_path(data_dir, run_id)
-    candidate_table = pq.read_table(data_dir / "candidate_pairs.parquet")
+    candidate_table = pq.read_table(get_blocking_run_output_dir(data_dir, run_id) / "candidate_pairs.parquet")
     table = pq.read_table(scored_path)
     errors = schemas.validate_contract_rules(table, "scored_pairs", candidate_table)
     if errors:

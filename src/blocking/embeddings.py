@@ -14,6 +14,8 @@ import faiss
 import numpy as np
 from sentence_transformers import SentenceTransformer
 
+from src.shared.paths import get_extraction_run_output_dir
+
 logger = logging.getLogger(__name__)
 
 SBERT_MODEL = "NbAiLab/nb-sbert-base"
@@ -37,7 +39,7 @@ def load_entities_for_embedding(
         Tuple of (entity_ids, normalized_names, contexts) lists, all same length
         and ordered by entity_id for deterministic alignment.
     """
-    entities_path = data_dir / "entities.parquet"
+    entities_path = get_extraction_run_output_dir(data_dir, run_id) / "entities.parquet"
     con.execute(
         f"CREATE OR REPLACE TABLE entities AS SELECT * FROM '{entities_path}'"
     )

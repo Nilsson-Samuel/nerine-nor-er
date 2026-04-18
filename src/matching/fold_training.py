@@ -15,10 +15,10 @@ from typing import Any
 
 import polars as pl
 
-from src.evaluation.run import get_evaluation_labels_path
 from src.matching.run import FEATURE_COLUMNS, PAIR_KEY_COLUMNS
 from src.matching.reranker import save_lightgbm_artifacts, train_lightgbm
 from src.matching.writer import get_features_output_path
+from src.shared.paths import get_evaluation_labels_path
 
 FOLD_SUMMARY_FILENAME = "fold_summary.json"
 FOLD_METRICS_FILENAME = "fold_metrics.csv"

@@ -23,15 +23,11 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from src.blocking.run import run_blocking
 from src.evaluation.run import (
     DEFAULT_MATCH_THRESHOLD,
-    get_evaluation_report_path,
     run_evaluation,
     write_training_labels_from_gold,
 )
-from src.extraction.run import run_extraction
-from src.ingestion.run import run_ingestion
 from src.matching.fold_training import (
     AGGREGATE_FOLD_REPORTS_FILENAME,
     AGGREGATE_FOLD_SUMMARY_FILENAME,
@@ -44,8 +40,7 @@ from src.matching.fold_training import (
     write_fold_metrics_csv,
     write_fold_summary_json,
 )
-from src.matching.run import run_features, run_scoring
-from src.resolution.run import run_resolution
+from src.shared.paths import get_evaluation_report_path
 
 
 logger = logging.getLogger(__name__)
@@ -233,6 +228,11 @@ def _ordered_case_names(fold: FoldConfig) -> list[str]:
 
 def _run_case_feature_pipeline(case: CaseConfig, fold_dir: Path, fold_name: str) -> CaseRun:
     """Run feature-producing stages for one case inside one fold."""
+    from src.blocking.run import run_blocking
+    from src.extraction.run import run_extraction
+    from src.ingestion.run import run_ingestion
+    from src.matching.run import run_features
+
     case_data_dir = fold_dir / case.name
     run_id = _stable_run_id(fold_name, case.name)
     case_data_dir.mkdir(parents=True, exist_ok=True)
@@ -299,6 +299,9 @@ def _evaluate_held_out_case(
     enable_shap: bool,
 ) -> dict[str, Any]:
     """Score, resolve, and evaluate the held-out case with the frozen fold model."""
+    from src.matching.run import run_scoring
+    from src.resolution.run import run_resolution
+
     logger.info("Fold %s: scoring held-out case %s", fold.name, case_run.case_name)
     run_scoring(
         case_run.data_dir,

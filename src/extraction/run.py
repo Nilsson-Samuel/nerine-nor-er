@@ -21,9 +21,11 @@ from src.extraction.regex_supplements import (
     merge_regex_with_ner,
 )
 from src.extraction.writer import write_entities_parquet
+from src.shared.paths import get_extraction_run_output_dir, get_ingestion_run_output_dir
 from src.shared.schemas import validate_contract_rules
 
 logger = logging.getLogger(__name__)
+PROGRESS_LOG_EVERY = 100
 
 _EXTRACTION_PROGRESS_LOG_INTERVAL = 200
 
@@ -63,7 +65,8 @@ def run_extraction(
         return run_id
 
     # Step 3: Attach context windows (needs chunk text lookup)
-    chunk_texts = _build_chunk_text_lookup(data_dir / "chunks.parquet", run_id, con)
+    chunks_path = get_ingestion_run_output_dir(data_dir, run_id) / "chunks.parquet"
+    chunk_texts = _build_chunk_text_lookup(chunks_path, run_id, con)
     _attach_contexts(entities, chunk_texts)
 
     # Step 4: Write entities.parquet
@@ -113,15 +116,13 @@ def run_mention_extraction(
         con = duckdb.connect()
 
     data_dir = Path(data_dir)
-    chunks_path = data_dir / "chunks.parquet"
-
-    if not chunks_path.exists():
-        logger.warning("No chunks.parquet found at %s", chunks_path)
-        return []
-
+    chunks_path = get_ingestion_run_output_dir(data_dir, run_id) / "chunks.parquet"
     chunks = _load_chunks(chunks_path, run_id, con)
     if not chunks:
-        logger.warning("No chunks found for run_id=%s", run_id)
+        if chunks_path.exists():
+            logger.warning("No chunks found for run_id=%s", run_id)
+        else:
+            logger.warning("No chunks.parquet found at %s", chunks_path)
         return []
 
     logger.info("Extraction start: %d chunks (run_id=%s)", len(chunks), run_id)
@@ -133,7 +134,6 @@ def run_mention_extraction(
     counts = {"ner": 0, "regex": 0}
     type_counts: dict[str, int] = {}
     progress_t0 = time.monotonic()
-
     for index, chunk in enumerate(chunks, start=1):
         chunk_mentions = _extract_chunk_mentions(chunk, ner_pipe)
         for m in chunk_mentions:
@@ -177,9 +177,16 @@ def _load_chunks(
     chunks_path: Path, run_id: str, con: duckdb.DuckDBPyConnection,
 ) -> list[dict]:
     """Load chunks for a run, sorted by (doc_id, chunk_index)."""
-    con.execute(
-        f"CREATE OR REPLACE TABLE chunks AS SELECT * FROM '{chunks_path}'"
-    )
+    if chunks_path.exists():
+        con.execute(
+            f"CREATE OR REPLACE TABLE chunks AS SELECT * FROM '{chunks_path}'"
+        )
+    else:
+        try:
+            con.execute("SELECT 1 FROM chunks LIMIT 1").fetchone()
+        except duckdb.Error:
+            return []
+
     rows = con.execute(
         "SELECT chunk_id, doc_id, text, page_num, source_unit_kind "
         "FROM chunks WHERE run_id = ? "

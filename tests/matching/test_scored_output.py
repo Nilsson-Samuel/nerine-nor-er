@@ -14,6 +14,7 @@ from src.matching.run import run_features, run_scoring
 from src.matching.reranker import save_lightgbm_artifacts, train_lightgbm
 from src.matching.writer import get_features_output_path, get_scored_pairs_output_path
 from src.shared import schemas
+from src.shared.paths import get_blocking_run_output_dir
 from src.synthetic.build_matching_dataset import build_matching_dataset, load_labeled_feature_matrix
 
 
@@ -100,7 +101,7 @@ def test_scored_pairs_output_matches_contract(scoring_data_dir: tuple[Path, str]
 
     scored = run_scoring(data_dir, run_id, scored_at=scored_at)
     scored_table = pq.read_table(get_scored_pairs_output_path(data_dir, run_id))
-    candidate_table = pq.read_table(data_dir / "candidate_pairs.parquet")
+    candidate_table = pq.read_table(get_blocking_run_output_dir(data_dir, run_id) / "candidate_pairs.parquet")
 
     assert scored.columns == [
         "run_id",
@@ -124,7 +125,7 @@ def test_scored_pairs_output_matches_contract(scoring_data_dir: tuple[Path, str]
         == []
     )
 
-    candidates = pl.read_parquet(data_dir / "candidate_pairs.parquet").filter(pl.col("run_id") == run_id)
+    candidates = pl.read_parquet(get_blocking_run_output_dir(data_dir, run_id) / "candidate_pairs.parquet").filter(pl.col("run_id") == run_id)
     expected_keys = candidates.sort(["entity_id_a", "entity_id_b"]).select(
         ["run_id", "entity_id_a", "entity_id_b"]
     )
@@ -174,7 +175,7 @@ def test_scored_pairs_contract_requires_all_candidate_pairs_to_be_scored(
     )
 
     scored_table = pq.read_table(get_scored_pairs_output_path(data_dir, run_id))
-    candidate_table = pq.read_table(data_dir / "candidate_pairs.parquet")
+    candidate_table = pq.read_table(get_blocking_run_output_dir(data_dir, run_id) / "candidate_pairs.parquet")
 
     truncated_scored_table = scored_table.slice(0, scored_table.num_rows - 1)
     errors = schemas.validate_contract_rules(

@@ -20,6 +20,7 @@ from src.shared.fixtures import (
     normalize_pair,
     write_mock_handoff,
 )
+from src.shared.paths import get_blocking_run_output_dir, get_extraction_run_output_dir
 
 
 # ---------------------------------------------------------------------------
@@ -127,17 +128,19 @@ def test_candidates_unique_keys_via_duckdb() -> None:
 
 def test_write_mock_handoff_creates_files(tmp_path) -> None:
     write_mock_handoff(tmp_path)
-    assert (tmp_path / "entities.parquet").exists()
-    assert (tmp_path / "candidate_pairs.parquet").exists()
-    assert (tmp_path / "embeddings.npy").exists()
-    assert (tmp_path / "context_embeddings.npy").exists()
-    assert (tmp_path / "embedding_entity_ids.npy").exists()
+    extraction_dir = get_extraction_run_output_dir(tmp_path, DEFAULT_RUN_ID)
+    blocking_dir = get_blocking_run_output_dir(tmp_path, DEFAULT_RUN_ID)
+    assert (extraction_dir / "entities.parquet").exists()
+    assert (blocking_dir / "candidate_pairs.parquet").exists()
+    assert (blocking_dir / "embeddings.npy").exists()
+    assert (blocking_dir / "context_embeddings.npy").exists()
+    assert (blocking_dir / "embedding_entity_ids.npy").exists()
 
 
 def test_written_files_pass_contract_rules(tmp_path) -> None:
     write_mock_handoff(tmp_path)
-    entities   = pq.read_table(tmp_path / "entities.parquet")
-    candidates = pq.read_table(tmp_path / "candidate_pairs.parquet")
+    entities   = pq.read_table(get_extraction_run_output_dir(tmp_path, DEFAULT_RUN_ID) / "entities.parquet")
+    candidates = pq.read_table(get_blocking_run_output_dir(tmp_path, DEFAULT_RUN_ID) / "candidate_pairs.parquet")
     assert schemas.validate_contract_rules(entities,   "entities")        == []
     assert schemas.validate_contract_rules(candidates, "candidate_pairs") == []
 
@@ -149,15 +152,20 @@ def test_determinism(tmp_path) -> None:
     write_mock_handoff(dir_a)
     write_mock_handoff(dir_b)
 
+    extraction_a = get_extraction_run_output_dir(dir_a, DEFAULT_RUN_ID)
+    extraction_b = get_extraction_run_output_dir(dir_b, DEFAULT_RUN_ID)
+    blocking_a = get_blocking_run_output_dir(dir_a, DEFAULT_RUN_ID)
+    blocking_b = get_blocking_run_output_dir(dir_b, DEFAULT_RUN_ID)
+
+    assert (extraction_a / "entities.parquet").read_bytes() == (extraction_b / "entities.parquet").read_bytes()
     for fname in (
-        "entities.parquet",
         "candidate_pairs.parquet",
         "embeddings.npy",
         "context_embeddings.npy",
         "embedding_entity_ids.npy",
     ):
-        bytes_a = (dir_a / fname).read_bytes()
-        bytes_b = (dir_b / fname).read_bytes()
+        bytes_a = (blocking_a / fname).read_bytes()
+        bytes_b = (blocking_b / fname).read_bytes()
         assert bytes_a == bytes_b, f"{fname}: output differs between runs"
 
 
