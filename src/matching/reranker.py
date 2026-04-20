@@ -105,7 +105,7 @@ def train_lightgbm(
     """Train a deterministic baseline LightGBM classifier.
 
     Args:
-        X_train: Training feature matrix with the 14 matching features.
+        X_train: Training feature matrix with the matching feature columns.
         y_train: Binary training labels aligned to ``X_train``.
         params: Optional LightGBM parameter overrides.
 

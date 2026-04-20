@@ -73,7 +73,7 @@ def test_build_cooccurrence_meta_features_handles_null_and_empty_doc_ids() -> No
     assert result["blocking_method_count"].to_list() == [1, 2, 3, 4]
 
 
-def test_full_feature_contract_contains_14_feature_columns(handoff_dir: Path) -> None:
+def test_full_feature_contract_contains_15_feature_columns(handoff_dir: Path) -> None:
     pairs = load_pairs_with_metadata(handoff_dir, DEFAULT_RUN_ID)
     artifacts = load_embedding_artifacts(handoff_dir, DEFAULT_RUN_ID)
 
@@ -88,7 +88,7 @@ def test_full_feature_contract_contains_14_feature_columns(handoff_dir: Path) ->
         *STRUCTURED_IDENTITY_FEATURE_COLUMNS,
         *COOCCURRENCE_META_FEATURE_COLUMNS,
     ]
-    assert len(all_feature_columns) == 14
+    assert len(all_feature_columns) == 15
 
     merged = pl.concat(
         [string_df, embedding_df, structured_df, cooccurrence_df],

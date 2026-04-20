@@ -129,7 +129,7 @@ def run_features(data_dir: Path | str, run_id: str) -> pl.DataFrame:
         run_id: Pipeline run identifier.
 
     Returns:
-        Feature table with pair key columns and 14 feature columns.
+        Feature table with pair key columns and 15 feature columns.
     """
     t0 = time.monotonic()
     data_dir = Path(data_dir)
