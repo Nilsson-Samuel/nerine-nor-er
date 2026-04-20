@@ -24,6 +24,7 @@ EVALUATION_STAGE_DIRNAME = "evaluation"
 PIPELINE_STAGE_DIRNAME = "pipeline"
 
 EVALUATION_REPORT_FILENAME = "evaluation_report.json"
+EVALUATION_MARKDOWN_REPORT_FILENAME = "evaluation_report.md"
 EVALUATION_LABELS_FILENAME = "labels.parquet"
 
 
@@ -71,6 +72,14 @@ def get_evaluation_run_output_dir(data_dir: Path | str, run_id: str) -> Path:
 def get_evaluation_report_path(data_dir: Path | str, run_id: str) -> Path:
     """Build the per-run evaluation report path."""
     return get_evaluation_run_output_dir(data_dir, run_id) / EVALUATION_REPORT_FILENAME
+
+
+def get_evaluation_markdown_report_path(data_dir: Path | str, run_id: str) -> Path:
+    """Build the per-run human-readable evaluation report path."""
+    return (
+        get_evaluation_run_output_dir(data_dir, run_id)
+        / EVALUATION_MARKDOWN_REPORT_FILENAME
+    )
 
 
 def get_evaluation_labels_path(data_dir: Path | str, run_id: str) -> Path:

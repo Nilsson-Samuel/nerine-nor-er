@@ -141,6 +141,29 @@ def test_scored_pairs_output_matches_contract(scoring_data_dir: tuple[Path, str]
     assert scored_table.column("shap_top5").to_pylist() == [[] for _ in range(scored.height)]
 
 
+def test_run_scoring_can_load_model_from_explicit_model_dir(
+    scoring_data_dir: tuple[Path, str],
+    tmp_path: Path,
+) -> None:
+    data_dir, run_id = scoring_data_dir
+    model_dir = tmp_path / "model_store"
+    model_dir.mkdir()
+    (data_dir / "reranker_model.txt").replace(model_dir / "reranker_model.txt")
+    (data_dir / "reranker_model_metadata.json").replace(
+        model_dir / "reranker_model_metadata.json"
+    )
+
+    scored = run_scoring(
+        data_dir,
+        run_id,
+        scored_at=datetime(2026, 3, 9, 12, 0, tzinfo=timezone.utc),
+        model_dir=model_dir,
+    )
+
+    assert scored.height > 0
+    assert scored["score"].is_between(0.0, 1.0, closed="both").all()
+
+
 def test_scored_pairs_contract_requires_all_candidate_pairs_to_be_scored(
     scoring_data_dir: tuple[Path, str],
 ) -> None:

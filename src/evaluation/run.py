@@ -32,15 +32,17 @@ from src.matching.writer import get_scored_pairs_output_path
 from src.shared.paths import (
     get_blocking_run_output_dir,
     get_evaluation_labels_path,
+    get_evaluation_markdown_report_path,
     get_evaluation_report_path,
     get_extraction_run_output_dir,
     get_ingestion_run_output_dir,
 )
 from src.resolution.writer import get_resolved_entities_output_path
 from src.shared import schemas
+from src.shared.config import PAIR_MATCH_THRESHOLD
 from src.synthetic.build_matching_dataset import LABELS_SCHEMA
 
-DEFAULT_MATCH_THRESHOLD = 0.5
+DEFAULT_MATCH_THRESHOLD = PAIR_MATCH_THRESHOLD
 DEFAULT_ALLOWED_METRIC_DROP = {
     "pairwise_f1": 0.03,
     "bcubed_f1": 0.03,
@@ -88,6 +90,109 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     return parser.parse_args(argv)
 
+def _prepare_gold_label_bridge(
+    data_dir: Path,
+    run_id: str,
+    gold_path: Path,
+) -> dict[str, Any]:
+    """Build gold-bridge artifacts once for label writing and full evaluation."""
+    docs = _load_docs(data_dir, run_id)
+    chunks = _attach_chunk_global_offsets(_load_chunks(data_dir, run_id), docs)
+    gold_mentions, gold_offset_summary = _remap_gold_offsets_to_run_text(
+        _remap_gold_doc_ids(_load_gold_mentions(gold_path), docs),
+        chunks,
+    )
+    trusted_gold_mentions = (
+        gold_mentions.filter(pl.col("_offset_resolved"))
+        .drop("_offset_resolved")
+        .sort(["doc_id", "char_start", "char_end", "mention_id"])
+    )
+    entities = _load_entities(data_dir, run_id)
+    candidate_pairs = _load_candidate_pairs(data_dir, run_id)
+    predicted_mentions = _build_predicted_mentions(entities, chunks)
+    matched_mentions = _match_gold_to_predicted(
+        trusted_gold_mentions,
+        predicted_mentions,
+    )
+    gold_group_by_entity, bridge_summary = _assign_gold_groups(
+        entities,
+        matched_mentions,
+    )
+    bridge_summary["gold_mentions"] = gold_mentions.height
+    bridge_summary["trusted_gold_mentions"] = trusted_gold_mentions.height
+    bridge_summary.update(gold_offset_summary)
+    bridge_summary["matched_mention_rate"] = (
+        matched_mentions.height / trusted_gold_mentions.height
+        if trusted_gold_mentions.height
+        else 0.0
+    )
+    bridge_summary["matched_mentions_by_method"] = {
+        str(row["match_method"]): int(row["count"])
+        for row in matched_mentions.group_by("match_method")
+        .len()
+        .rename({"len": "count"})
+        .iter_rows(named=True)
+    }
+
+    entity_doc_id_by_entity = {
+        str(row["entity_id"]): str(row["doc_id"])
+        for row in entities.select(["entity_id", "doc_id"]).iter_rows(named=True)
+    }
+    labels_table = _build_labels_table(candidate_pairs, gold_group_by_entity)
+    bridge_summary["label_rows_written"] = labels_table.num_rows
+    bridge_summary["candidate_pairs_excluded_from_labels"] = (
+        candidate_pairs.height - labels_table.num_rows
+    )
+    return {
+        "chunks": chunks,
+        "gold_mentions": gold_mentions,
+        "trusted_gold_mentions": trusted_gold_mentions,
+        "entities": entities,
+        "candidate_pairs": candidate_pairs,
+        "predicted_mentions": predicted_mentions,
+        "gold_group_by_entity": gold_group_by_entity,
+        "entity_doc_id_by_entity": entity_doc_id_by_entity,
+        "labels_table": labels_table,
+        "bridge_summary": bridge_summary,
+    }
+
+
+def write_training_labels_from_gold(
+    data_dir: Path | str,
+    run_id: str,
+    gold_path: Path | str,
+    *,
+    shared_labels_path: Path | str | None = None,
+    shared_labels_allowed_doc_ids: Sequence[str] | None = None,
+) -> dict[str, Any]:
+    """Write one run's gold-bridge labels without requiring scoring outputs."""
+    data_dir = Path(data_dir)
+    gold_path = Path(gold_path)
+    labels_path = get_evaluation_labels_path(data_dir, run_id)
+    bridge = _prepare_gold_label_bridge(data_dir, run_id, gold_path)
+
+    _write_parquet_atomic(bridge["labels_table"], labels_path)
+    if shared_labels_path is not None:
+        shared_labels_table = _build_labels_table(
+            bridge["candidate_pairs"],
+            bridge["gold_group_by_entity"],
+            entity_doc_id_by_entity=bridge["entity_doc_id_by_entity"],
+            allowed_doc_ids=shared_labels_allowed_doc_ids,
+        )
+        _merge_labels_into_shared_store(
+            shared_labels_table,
+            Path(shared_labels_path),
+            run_id,
+        )
+
+    return {
+        "run_id": run_id,
+        "gold_path": str(gold_path.resolve()),
+        "labels_path": str(labels_path),
+        "label_rows_written": int(bridge["labels_table"].num_rows),
+        "candidate_pair_count": int(bridge["candidate_pairs"].height),
+        "bridge_summary": dict(bridge["bridge_summary"]),
+    }
 def run_evaluation(
     data_dir: Path | str,
     run_id: str,
@@ -105,57 +210,23 @@ def run_evaluation(
     data_dir = Path(data_dir)
     gold_path = Path(gold_path)
     report_path = get_evaluation_report_path(data_dir, run_id)
+    markdown_report_path = get_evaluation_markdown_report_path(data_dir, run_id)
+    bridge = _prepare_gold_label_bridge(data_dir, run_id, gold_path)
     labels_path = get_evaluation_labels_path(data_dir, run_id)
 
-    docs = _load_docs(data_dir, run_id)
-    chunks = _attach_chunk_global_offsets(_load_chunks(data_dir, run_id), docs)
-    gold_mentions, gold_offset_summary = _remap_gold_offsets_to_run_text(
-        _remap_gold_doc_ids(_load_gold_mentions(gold_path), docs),
-        chunks,
-    )
-    trusted_gold_mentions = (
-        gold_mentions.filter(pl.col("_offset_resolved"))
-        .drop("_offset_resolved")
-        .sort(["doc_id", "char_start", "char_end", "mention_id"])
-    )
-    entities = _load_entities(data_dir, run_id)
-    candidate_pairs = _load_candidate_pairs(data_dir, run_id)
+    chunks = bridge["chunks"]
+    gold_mentions = bridge["gold_mentions"]
+    trusted_gold_mentions = bridge["trusted_gold_mentions"]
+    entities = bridge["entities"]
+    candidate_pairs = bridge["candidate_pairs"]
     scored_pairs = _load_scored_pairs(data_dir, run_id)
     resolved_entities = _load_resolved_entities(data_dir, run_id)
+    predicted_mentions = bridge["predicted_mentions"]
+    gold_group_by_entity = bridge["gold_group_by_entity"]
+    bridge_summary = dict(bridge["bridge_summary"])
+    entity_doc_id_by_entity = bridge["entity_doc_id_by_entity"]
+    labels_table = bridge["labels_table"]
 
-    predicted_mentions = _build_predicted_mentions(entities, chunks)
-    matched_mentions = _match_gold_to_predicted(
-        trusted_gold_mentions, predicted_mentions
-    )
-    gold_group_by_entity, bridge_summary = _assign_gold_groups(
-        entities, matched_mentions
-    )
-    bridge_summary["gold_mentions"] = gold_mentions.height
-    bridge_summary["trusted_gold_mentions"] = trusted_gold_mentions.height
-    bridge_summary.update(gold_offset_summary)
-    bridge_summary["matched_mention_rate"] = (
-        matched_mentions.height / trusted_gold_mentions.height
-        if trusted_gold_mentions.height
-        else 0.0
-    )
-    match_method_counts = {
-        str(row["match_method"]): int(row["count"])
-        for row in matched_mentions.group_by("match_method")
-        .len()
-        .rename({"len": "count"})
-        .iter_rows(named=True)
-    }
-    bridge_summary["matched_mentions_by_method"] = match_method_counts
-
-    entity_doc_id_by_entity = {
-        str(row["entity_id"]): str(row["doc_id"])
-        for row in entities.select(["entity_id", "doc_id"]).iter_rows(named=True)
-    }
-    labels_table = _build_labels_table(candidate_pairs, gold_group_by_entity)
-    bridge_summary["label_rows_written"] = labels_table.num_rows
-    bridge_summary["candidate_pairs_excluded_from_labels"] = (
-        candidate_pairs.height - labels_table.num_rows
-    )
     _write_parquet_atomic(labels_table, labels_path)
     if shared_labels_path is not None:
         shared_labels_table = _build_labels_table(
@@ -297,7 +368,8 @@ def run_evaluation(
         "regression_checks": regression_checks,
     }
     _write_json_atomic(report, report_path)
-    _print_console_summary(report, report_path)
+    _write_evaluation_markdown(report, markdown_report_path)
+    _print_console_summary(report, report_path, markdown_report_path)
     return report
 
 
@@ -1237,26 +1309,337 @@ def _write_parquet_atomic(table: pa.Table, path: Path) -> None:
         raise
 
 
-def _print_console_summary(report: Mapping[str, Any], report_path: Path) -> None:
-    """Emit a concise human-readable summary for one evaluation run."""
+def _write_evaluation_markdown(report: Mapping[str, Any], path: Path) -> None:
+    """Write one readable Markdown report beside the JSON evaluation output."""
+    inputs = report["inputs"]
+    scope = report["metric_scope"]
+    metrics = report["metrics"]
+    stage_metrics = report["stage_metrics"]
+    alignment = report["alignment"]
+    regression_checks = report["regression_checks"]
+    error_analysis = report["error_analysis"]
+    failed_checks = [
+        check for check in regression_checks["checks"] if not bool(check["passed"])
+    ]
+
+    lines = [
+        f"# Evaluation Report: {report['run_id']}",
+        "",
+        f"- Evaluated at: `{report['evaluated_at']}`",
+        f"- Regression checks: {'passed' if regression_checks['passed'] else 'failed'}",
+        "",
+        "## Inputs",
+        "",
+        _markdown_table(
+            ["Input", "Value"],
+            [
+                ["Gold annotations", _markdown_path(inputs["gold_path"])],
+                ["Scored pairs", _markdown_path(inputs["scored_pairs_path"])],
+                ["Resolved entities", _markdown_path(inputs["resolved_entities_path"])],
+                ["Labels", _markdown_path(inputs["labels_path"])],
+                ["Baseline report", _markdown_path(inputs["baseline_report_path"])],
+            ],
+        ),
+        "",
+        "## Scope",
+        "",
+        _markdown_table(
+            ["Item", "Value"],
+            [
+                ["Evaluation entity count", scope["evaluation_entity_count"]],
+                ["Evaluation candidate pair count", scope["evaluation_candidate_pair_count"]],
+                ["Excluded unmatched entities", scope["excluded_unmatched_entity_count"]],
+                ["Excluded ambiguous entities", scope["excluded_ambiguous_entity_count"]],
+                ["Excluded candidate pairs", scope["excluded_candidate_pair_count"]],
+            ],
+        ),
+        "",
+        "## Final Clustering / Resolution Metrics",
+        "",
+        _markdown_table(
+            ["Metric", "Value"],
+            [
+                ["Pairwise precision", _format_markdown_metric(metrics["pairwise_precision"])],
+                ["Pairwise recall", _format_markdown_metric(metrics["pairwise_recall"])],
+                ["Pairwise F1", _format_markdown_metric(metrics["pairwise_f1"])],
+                ["ARI", _format_markdown_metric(metrics["ari"])],
+                ["NMI", _format_markdown_metric(metrics["nmi"])],
+                ["B-cubed precision", _format_markdown_metric(metrics["bcubed_precision"])],
+                ["B-cubed recall", _format_markdown_metric(metrics["bcubed_recall"])],
+                ["B-cubed F1", _format_markdown_metric(metrics["bcubed_f1"])],
+            ],
+        ),
+        "",
+        "## Stage Metrics",
+        "",
+        _markdown_table(
+            ["Stage", "Precision", "Recall", "F1", "Notes"],
+            [
+                [
+                    "Extraction",
+                    _format_markdown_metric(stage_metrics["extraction"]["precision"]),
+                    _format_markdown_metric(stage_metrics["extraction"]["recall"]),
+                    _format_markdown_metric(stage_metrics["extraction"]["f1"]),
+                    (
+                        f"predicted={stage_metrics['extraction']['predicted_count']}, "
+                        f"gold={stage_metrics['extraction']['gold_count']}"
+                    ),
+                ],
+                [
+                    "Blocking",
+                    "-",
+                    _format_markdown_metric(
+                        stage_metrics["blocking"]["gold_positive_pair_recall"]
+                    ),
+                    "-",
+                    (
+                        f"recovered={stage_metrics['blocking']['gold_positive_pairs_recovered']}/"
+                        f"{stage_metrics['blocking']['gold_positive_pair_count']}"
+                    ),
+                ],
+                [
+                    "Matching",
+                    _format_markdown_metric(stage_metrics["matching"]["precision"]),
+                    _format_markdown_metric(stage_metrics["matching"]["recall"]),
+                    _format_markdown_metric(stage_metrics["matching"]["f1"]),
+                    (
+                        f"evaluated_pairs={stage_metrics['matching']['evaluated_candidate_pair_count']}, "
+                        f"threshold={_format_markdown_metric(stage_metrics['matching']['score_threshold'])}"
+                    ),
+                ],
+            ],
+        ),
+        "",
+        "## Alignment",
+        "",
+        _markdown_table(
+            ["Item", "Value"],
+            [
+                ["Matched mention rate", _format_markdown_metric(alignment["matched_mention_rate"])],
+                ["Trusted gold mentions", alignment["trusted_gold_mentions"]],
+                ["Matched gold mentions", alignment["matched_gold_mentions"]],
+                ["Entities with gold group", alignment["entities_with_gold_group"]],
+                ["Entities without gold match", alignment["entities_without_gold_match"]],
+                [
+                    "Entities with ambiguous gold groups",
+                    alignment["entities_with_ambiguous_gold_groups"],
+                ],
+            ],
+        ),
+        "",
+        "## Regression Checks",
+        "",
+        f"Overall status: **{'passed' if regression_checks['passed'] else 'failed'}**",
+        "",
+    ]
+    if failed_checks:
+        lines.extend(
+            [
+                "Failed checks:",
+                *[
+                    (
+                        f"- `{check['check']}`: "
+                        f"{_compact_markdown_value(check.get('details'))}"
+                    )
+                    for check in failed_checks
+                ],
+                "",
+            ]
+        )
+
+    lines.extend(
+        [
+            _markdown_table(
+                ["Check", "Passed", "Details"],
+                [
+                    [
+                        str(check["check"]),
+                        "yes" if bool(check["passed"]) else "no",
+                        _compact_markdown_value(check.get("details")),
+                    ]
+                    for check in regression_checks["checks"]
+                ],
+            ),
+            "",
+            "## Error Analysis",
+            "",
+            "### False Merges",
+            "",
+            _markdown_table(
+                ["Item", "Value"],
+                [
+                    [
+                        "Clusters with false merge",
+                        error_analysis["false_merges"]["cluster_count_with_false_merge"],
+                    ],
+                    ["False-merge pair count", error_analysis["false_merges"]["pair_count"]],
+                ],
+            ),
+            *_false_merge_example_lines(error_analysis["false_merges"]["examples"]),
+            "",
+            "### False Splits",
+            "",
+            _markdown_table(
+                ["Item", "Value"],
+                [
+                    [
+                        "Gold groups split",
+                        error_analysis["false_splits"]["gold_group_count_split"],
+                    ]
+                ],
+            ),
+            *_false_split_example_lines(error_analysis["false_splits"]["examples"]),
+            "",
+            "### Extraction Errors",
+            "",
+            _markdown_table(
+                ["Item", "Value"],
+                [
+                    [
+                        "Missing gold mentions by type",
+                        _compact_markdown_value(
+                            error_analysis["extraction"]["missing_gold_mentions_by_type"]
+                        ),
+                    ],
+                    [
+                        "Spurious predicted mentions by type",
+                        _compact_markdown_value(
+                            error_analysis["extraction"]["spurious_predicted_mentions_by_type"]
+                        ),
+                    ],
+                ],
+            ),
+            *_mention_example_lines(
+                "Missing gold examples",
+                error_analysis["extraction"]["missing_gold_examples"],
+            ),
+            *_mention_example_lines(
+                "Spurious predicted examples",
+                error_analysis["extraction"]["spurious_predicted_examples"],
+            ),
+            "",
+        ]
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def _markdown_table(headers: list[str], rows: list[list[Any]]) -> str:
+    """Build one compact GitHub-flavored Markdown table."""
+    table = [
+        "| " + " | ".join(headers) + " |",
+        "| " + " | ".join(["---"] * len(headers)) + " |",
+    ]
+    for row in rows:
+        table.append("| " + " | ".join(str(cell) for cell in row) + " |")
+    return "\n".join(table)
+
+
+def _markdown_path(value: Any) -> str:
+    """Format an optional artifact path for Markdown output."""
+    if value is None:
+        return "-"
+    return f"`{value}`"
+
+
+def _format_markdown_metric(value: Any) -> str:
+    """Format a numeric metric or simple scalar for readable output."""
+    if isinstance(value, float):
+        return f"{value:.3f}"
+    return str(value)
+
+
+def _compact_markdown_value(value: Any, *, max_length: int = 140) -> str:
+    """Collapse nested details into one short Markdown-safe string."""
+    if value is None:
+        return "-"
+    if isinstance(value, bool):
+        return "yes" if value else "no"
+    if isinstance(value, (int, float)):
+        return _format_markdown_metric(value)
+    text = json.dumps(value, sort_keys=True) if isinstance(value, (dict, list)) else str(value)
+    if len(text) > max_length:
+        return f"{text[: max_length - 3]}..."
+    return text
+
+
+def _false_merge_example_lines(examples: Sequence[Mapping[str, Any]]) -> list[str]:
+    """Render a compact false-merge example list."""
+    if not examples:
+        return ["Examples: none"]
+
+    lines = ["Examples:"]
+    for example in examples[:3]:
+        pair_preview = "; ".join(
+            (
+                f"{pair['entity_a']['text']} ({pair['gold_group_a']}) vs "
+                f"{pair['entity_b']['text']} ({pair['gold_group_b']})"
+            )
+            for pair in example["pairs"][:2]
+        )
+        lines.append(
+            f"- Cluster `{example['cluster_id']}`: {example['pair_count']} bad pairs. {pair_preview}"
+        )
+    return lines
+
+
+def _false_split_example_lines(examples: Sequence[Mapping[str, Any]]) -> list[str]:
+    """Render a compact false-split example list."""
+    if not examples:
+        return ["Examples: none"]
+
+    lines = ["Examples:"]
+    for example in examples[:3]:
+        member_preview = ", ".join(member["text"] for member in example["members"][:3])
+        lines.append(
+            (
+                f"- Gold group `{example['gold_group_id']}` split across "
+                f"{', '.join(example['predicted_cluster_ids'])}: {member_preview}"
+            )
+        )
+    return lines
+
+
+def _mention_example_lines(title: str, examples: Sequence[Mapping[str, Any]]) -> list[str]:
+    """Render a compact mention-example list."""
+    if not examples:
+        return [f"{title}: none"]
+
+    lines = [f"{title}:"]
+    for example in examples[:3]:
+        lines.append(
+            (
+                f"- `{example['doc_id']}` {example['entity_type']} "
+                f"[{example['char_start']}, {example['char_end']}]: {example['text']}"
+            )
+        )
+    return lines
+
+
+def _print_console_summary(
+    report: Mapping[str, Any],
+    report_path: Path,
+    markdown_report_path: Path,
+) -> None:
+    """Emit one concise summary line for the completed evaluation run."""
     extraction = report["stage_metrics"]["extraction"]
+    blocking = report["stage_metrics"]["blocking"]
     matching = report["stage_metrics"]["matching"]
     metrics = report["metrics"]
-    alignment = report["alignment"]
     print(
         f"run_id={report['run_id']} "
         f"extraction_f1={extraction['f1']:.3f} "
+        f"blocking_recall={blocking['gold_positive_pair_recall']:.3f} "
         f"matching_f1={matching['f1']:.3f} "
-        f"pairwise_f1={metrics['pairwise_f1']:.3f} "
-        f"bcubed_f1={metrics['bcubed_f1']:.3f}"
+        f"pairwise={metrics['pairwise_precision']:.3f}/{metrics['pairwise_recall']:.3f}/"
+        f"{metrics['pairwise_f1']:.3f} "
+        f"ari={metrics['ari']:.3f} "
+        f"nmi={metrics['nmi']:.3f} "
+        f"bcubed={metrics['bcubed_precision']:.3f}/{metrics['bcubed_recall']:.3f}/"
+        f"{metrics['bcubed_f1']:.3f} "
+        f"checks={'passed' if report['regression_checks']['passed'] else 'failed'} "
+        f"json={report_path} md={markdown_report_path}"
     )
-    print(
-        "alignment "
-        f"entities_with_gold_group={alignment['entities_with_gold_group']} "
-        f"entities_without_gold_match={alignment['entities_without_gold_match']} "
-        f"entities_with_ambiguous_gold_groups={alignment['entities_with_ambiguous_gold_groups']}"
-    )
-    print(f"report={report_path}")
 
 
 def main(argv: Sequence[str] | None = None) -> int:

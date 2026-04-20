@@ -298,6 +298,7 @@ def run_scoring(
     run_id: str,
     scored_at: datetime | None = None,
     *,
+    model_dir: Path | str | None = None,
     enable_tuning: bool = False,
     tuning_mode: str = "smoke",
     tuning_trials: int = 2,
@@ -306,6 +307,7 @@ def run_scoring(
 ) -> pl.DataFrame:
     """Run inference scoring and write per-run scored output for one run."""
     data_dir = Path(data_dir)
+    model_dir = data_dir if model_dir is None else Path(model_dir)
     output_dir = get_matching_run_output_dir(data_dir, run_id)
     features_df = _load_feature_rows(data_dir, run_id)
     candidate_pairs_df = _load_candidate_pairs_for_scoring(data_dir, run_id)
@@ -322,7 +324,7 @@ def run_scoring(
         tuning_mode=tuning_mode,
         tuning_trials=tuning_trials,
     )
-    booster, metadata = load_lightgbm_artifacts(data_dir)
+    booster, metadata = load_lightgbm_artifacts(model_dir)
     scores = score_lightgbm(booster, features_df.select(FEATURE_COLUMNS)).tolist()
     shap_top5 = explain_lightgbm_top5(
         booster,

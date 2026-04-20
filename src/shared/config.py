@@ -2,6 +2,10 @@
 
 The resolution thresholds below describe three different decisions:
 
+- `PAIR_MATCH_THRESHOLD`: default probability cutoff used when converting
+  scored candidate pairs into binary match / non-match decisions for
+  pair-level evaluation and helper utilities.
+
 - `KEEP_SCORE_THRESHOLD`: minimum LightGBM same-entity probability required for
   an edge to enter the retained graph at all.
 - `OBJECTIVE_NEUTRAL_THRESHOLD`: the point inside correlation clustering where a
@@ -10,6 +14,11 @@ The resolution thresholds below describe three different decisions:
   reviewer-facing confidence handling. This does not change the graph or the
   clustering objective.
 """
+
+# Default pair-level decision threshold used by matching/evaluation helpers.
+# This is intentionally separate from the retained-graph and post-clustering
+# thresholds below.
+PAIR_MATCH_THRESHOLD = 0.50
 
 # Minimum reranker score required for a pair to survive into the retained graph.
 # Lower-scoring pairs are treated as too implausible to spend clustering work on.

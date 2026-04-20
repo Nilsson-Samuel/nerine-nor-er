@@ -13,12 +13,14 @@ import polars as pl
 from lightgbm import Booster, LGBMClassifier
 from sklearn.metrics import average_precision_score, fbeta_score, precision_score, recall_score
 
+from src.shared.config import PAIR_MATCH_THRESHOLD
+
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_LIGHTGBM_SEED = 7
 DEFAULT_MATCH_F_BETA = 0.5
-DEFAULT_MATCH_THRESHOLD = 0.5
+DEFAULT_MATCH_THRESHOLD = PAIR_MATCH_THRESHOLD
 DEFAULT_MODEL_VERSION = "lightgbm_baseline"
 MODEL_FILENAME = "reranker_model.txt"
 MODEL_METADATA_FILENAME = "reranker_model_metadata.json"
@@ -124,6 +126,7 @@ def save_lightgbm_artifacts(
     model_version: str = DEFAULT_MODEL_VERSION,
     training_params: Mapping[str, Any] | None = None,
     training_param_source: str = "baseline",
+    extra_metadata: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Persist a trained LightGBM model and minimal inference metadata."""
     if not isinstance(model_version, str) or not model_version.strip():
@@ -147,6 +150,8 @@ def save_lightgbm_artifacts(
         "training_param_source": training_param_source.strip(),
         "training_params": params_used,
     }
+    if extra_metadata is not None:
+        metadata.update(dict(extra_metadata))
     (out_dir / MODEL_METADATA_FILENAME).write_text(
         json.dumps(metadata, indent=2, sort_keys=True),
         encoding="utf-8",
