@@ -4,6 +4,14 @@ Builds a phonetic index from entity names using Double Metaphone codes.
 Norwegian characters are pre-normalized (æ→ae, ø→o, å→a, etc.) before
 encoding. Both per-token and full-name codes are indexed so that
 "Hansen" and "Hanssen" land in the same bucket.
+
+Oversized-bucket strategy: a pair is only emitted when the two entities
+share at least MIN_SHARED_CODES distinct phonetic codes. Common tokens
+(e.g. "HSN" for every Hansen variant) therefore cannot alone produce pairs
+— a second signal (the full-name code or another token) is required.
+Buckets above ENUMERATION_CAP are skipped for pair counting, but genuinely
+matching entities in those buckets will almost always share additional codes
+via smaller buckets.
 """
 
 import logging
@@ -13,7 +21,8 @@ from metaphone import doublemetaphone
 
 logger = logging.getLogger(__name__)
 
-MAX_BUCKET_SIZE = 500
+ENUMERATION_CAP = 5_000  # skip pair-counting in buckets larger than this
+MIN_SHARED_CODES = 2      # pairs must share at least this many phonetic codes
 
 
 def _nor_pre_normalize(text: str) -> str:
@@ -81,33 +90,52 @@ def build_phonetic_index(
 
 def query_phonetic_pairs(
     phonetic_index: dict[str, set[str]],
+    min_shared_codes: int = MIN_SHARED_CODES,
 ) -> list[tuple[str, str]]:
-    """Extract candidate pairs from entities sharing phonetic codes.
+    """Extract candidate pairs from entities sharing multiple phonetic codes.
 
-    Entities that share at least one phonetic code become a candidate pair.
-    All returned pairs are PER↔PER by construction (only PER entities indexed).
+    A pair is emitted only when the two entities share at least
+    ``min_shared_codes`` distinct phonetic codes. This replaces the hard
+    bucket-size skip: a single very common token code (e.g. "HSN") is no
+    longer sufficient to produce a candidate pair — the entities must also
+    agree on at least one other code (full-name code or another token).
+
+    Buckets above ENUMERATION_CAP are skipped for pair counting. Entities
+    from those buckets are still reachable via smaller shared-code buckets.
 
     Args:
         phonetic_index: Output of build_phonetic_index().
+        min_shared_codes: Minimum shared codes required to emit a pair.
 
     Returns:
-        List of (entity_id_a, entity_id_b) pairs (may contain duplicates).
+        List of deduplicated (entity_id_a, entity_id_b) pairs in canonical order.
     """
-    pairs: list[tuple[str, str]] = []
-    skipped = 0
-    for bucket in phonetic_index.values():
-        if len(bucket) > MAX_BUCKET_SIZE:
-            skipped += 1
+    pair_code_count: dict[tuple[str, str], int] = defaultdict(int)
+    skipped_large = 0
+
+    for code, eids in phonetic_index.items():
+        ids = sorted(eids)
+        if len(ids) > ENUMERATION_CAP:
+            skipped_large += 1
             continue
-        ids = sorted(bucket)
         for i in range(len(ids)):
             for j in range(i + 1, len(ids)):
-                pairs.append((ids[i], ids[j]))
+                a, b = ids[i], ids[j]
+                key = (a, b) if a < b else (b, a)
+                pair_code_count[key] += 1
 
-    if skipped:
+    pairs = [
+        pair for pair, count in pair_code_count.items() if count >= min_shared_codes
+    ]
+
+    if skipped_large:
         logger.warning(
-            "Phonetic blocking: %d buckets skipped (size > %d)",
-            skipped, MAX_BUCKET_SIZE,
+            "Phonetic blocking: %d buckets exceeded enumeration cap (%d) and were "
+            "skipped; matching entities are still reachable via other shared codes",
+            skipped_large, ENUMERATION_CAP,
         )
-    logger.info("Phonetic blocking: %d raw pairs from shared codes", len(pairs))
+    logger.info(
+        "Phonetic blocking: %d pairs with >= %d shared codes (%d candidates before filter)",
+        len(pairs), min_shared_codes, len(pair_code_count),
+    )
     return pairs
