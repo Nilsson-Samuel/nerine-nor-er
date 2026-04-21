@@ -3,12 +3,13 @@
 The regular tuning path optimizes pair labels inside one scoring run. This
 module keeps a separate, case-aware objective: each trial trains a fold model,
 scores the held-out case, runs resolution, and averages final clustering
-B-cubed F0.5 across folds. 
-Make sure you have enough cases for to ensure a reliable generalized model. 
+B-cubed F0.5 across folds.
+Make sure you have enough cases for to ensure a reliable generalized model.
 """
 
 from __future__ import annotations
 
+import csv
 import hashlib
 import json
 import math
@@ -36,14 +37,19 @@ from src.matching.fold_training import (
     DEFAULT_FOLD_MODEL_VERSION_PREFIX,
     FOLD_METRICS_FILENAME,
     FoldTrainingSource,
+    _format_markdown_metric,
+    _markdown_table,
     build_fold_summary_row,
-    build_macro_average_row,
     train_and_save_fold_model,
     write_fold_metrics_csv,
     write_fold_summary_json,
 )
 from src.matching.reranker import DEFAULT_LIGHTGBM_SEED
-from src.matching.tuning import build_tuning_summary, suggest_lightgbm_params
+from src.matching.tuning import (
+    VALID_TUNING_MODES,
+    build_tuning_summary,
+    suggest_lightgbm_params,
+)
 from src.matching.writer import get_features_output_path
 from src.shared import schemas
 from src.shared.paths import (
@@ -58,7 +64,10 @@ from src.shared.paths import (
 from src.synthetic.build_matching_dataset import LABELS_SCHEMA
 
 CASE_FOLD_BEST_PARAMS_FILENAME = "case_fold_optuna_best_params.json"
-CASE_FOLD_STUDY_SUMMARY_FILENAME = "case_fold_optuna_summary.json"
+FOLD_TUNING_SUMMARY_FILENAME = "fold_tuning_summary.json"
+FOLD_TUNING_TRIALS_FILENAME = "fold_tuning_trials.csv"
+FOLD_TUNING_REPORT_FILENAME = "fold_tuning_report.md"
+CASE_FOLD_STUDY_SUMMARY_FILENAME = FOLD_TUNING_SUMMARY_FILENAME
 TRIAL_SUMMARY_FILENAME = "trial_summary.json"
 CASE_FOLD_OBJECTIVE_METRIC = "bcubed_f0_5"
 CASE_FOLD_FINGERPRINT_ATTR = "case_fold_fingerprint"
@@ -620,13 +629,15 @@ def _macro_objective(rows: list[dict[str, Any]]) -> float:
     """Return macro-average B-cubed F0.5 or reject unusable fold metrics."""
     if not rows:
         raise ValueError("case-fold objective requires at least one completed fold")
+    values: list[float] = []
     for row in rows:
         value = row.get(CASE_FOLD_OBJECTIVE_METRIC)
         if not isinstance(value, (int, float)) or not math.isfinite(float(value)):
             raise ValueError(
                 f"fold {row.get('fold_name', '<unknown>')} has unusable metric"
             )
-    return float(build_macro_average_row(rows)[CASE_FOLD_OBJECTIVE_METRIC])
+        values.append(float(value))
+    return sum(values) / len(values)
 
 
 def case_fold_objective(
@@ -726,16 +737,268 @@ def _write_best_params_artifact(
     return CASE_FOLD_BEST_PARAMS_FILENAME
 
 
+def _remove_stale_best_params_artifact(output_root: Path) -> bool:
+    """Delete an old trusted-params file when the current run has no trusted best."""
+    artifact_path = output_root / CASE_FOLD_BEST_PARAMS_FILENAME
+    if not artifact_path.exists():
+        return False
+    artifact_path.unlink()
+    return True
+
+
+def _trial_state_name(trial: Any) -> str:
+    """Return a stable Optuna trial state label for reports."""
+    return getattr(trial.state, "name", str(trial.state))
+
+
+def _trial_params_json(trial: Any) -> str:
+    """Encode trial params as a compact CSV cell."""
+    return json.dumps(dict(trial.params), sort_keys=True, separators=(",", ":"))
+
+
+def _trial_passes_bcubed_recall_guardrail(
+    trial: Any,
+    min_bcubed_recall: float | None,
+) -> bool:
+    """Require every held-out fold to clear the recall guardrail when set."""
+    if min_bcubed_recall is None:
+        return True
+    fold_metrics = trial.user_attrs.get("fold_metrics", [])
+    if not fold_metrics:
+        return False
+    return all(
+        _metric_clears_minimum(row.get("bcubed_recall"), min_bcubed_recall)
+        for row in fold_metrics
+    )
+
+
+def _metric_clears_minimum(value: Any, minimum: float) -> bool:
+    """Treat missing, malformed, NaN, and infinite metrics as guardrail failures."""
+    try:
+        metric = float(value)
+    except (TypeError, ValueError):
+        return False
+    return math.isfinite(metric) and metric >= minimum
+
+
+def _trial_csv_rows(study: Any) -> list[dict[str, Any]]:
+    """Flatten trial and fold metrics so every fold result stays inspectable."""
+    rows: list[dict[str, Any]] = []
+    for trial in sorted(study.trials, key=lambda item: int(item.number)):
+        base_row = {
+            "trial_number": int(trial.number),
+            "trial_state": _trial_state_name(trial),
+            "case_fold_status": trial.user_attrs.get("case_fold_status", ""),
+            "objective_value": "" if trial.value is None else float(trial.value),
+            "objective_metric": trial.user_attrs.get(
+                "objective_metric",
+                CASE_FOLD_OBJECTIVE_METRIC,
+            ),
+            "params_json": _trial_params_json(trial),
+            "error": trial.user_attrs.get("case_fold_error", ""),
+        }
+        fold_metrics = trial.user_attrs.get("fold_metrics") or []
+        if not fold_metrics:
+            rows.append(
+                {
+                    **base_row,
+                    "fold_name": "",
+                    "held_out_case": "",
+                    "bcubed_f0_5": "",
+                    "bcubed_precision": "",
+                    "bcubed_recall": "",
+                    "pairwise_precision": "",
+                    "pairwise_recall": "",
+                    "pairwise_f1": "",
+                    "matching_pairwise_precision": "",
+                    "matching_pairwise_recall": "",
+                    "matching_pairwise_f1": "",
+                }
+            )
+            continue
+
+        for fold_row in fold_metrics:
+            rows.append(
+                {
+                    **base_row,
+                    "fold_name": fold_row.get("fold_name", ""),
+                    "held_out_case": fold_row.get("held_out_case", ""),
+                    "bcubed_f0_5": fold_row.get("bcubed_f0_5", ""),
+                    "bcubed_precision": fold_row.get("bcubed_precision", ""),
+                    "bcubed_recall": fold_row.get("bcubed_recall", ""),
+                    "pairwise_precision": fold_row.get("pairwise_precision", ""),
+                    "pairwise_recall": fold_row.get("pairwise_recall", ""),
+                    "pairwise_f1": fold_row.get("pairwise_f1", ""),
+                    "matching_pairwise_precision": fold_row.get(
+                        "matching_pairwise_precision",
+                        "",
+                    ),
+                    "matching_pairwise_recall": fold_row.get(
+                        "matching_pairwise_recall",
+                        "",
+                    ),
+                    "matching_pairwise_f1": fold_row.get(
+                        "matching_pairwise_f1",
+                        "",
+                    ),
+                }
+            )
+    return rows
+
+
+def write_fold_tuning_trials_csv(path: Path | str, study: Any) -> None:
+    """Write one flat CSV row per trial/fold metric result."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fieldnames = [
+        "trial_number",
+        "trial_state",
+        "case_fold_status",
+        "objective_value",
+        "objective_metric",
+        "fold_name",
+        "held_out_case",
+        "bcubed_f0_5",
+        "bcubed_precision",
+        "bcubed_recall",
+        "pairwise_precision",
+        "pairwise_recall",
+        "pairwise_f1",
+        "matching_pairwise_precision",
+        "matching_pairwise_recall",
+        "matching_pairwise_f1",
+        "params_json",
+        "error",
+    ]
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in _trial_csv_rows(study):
+            writer.writerow({field: row.get(field, "") for field in fieldnames})
+
+
+def _format_params_for_markdown(params: dict[str, Any]) -> list[str]:
+    """Render best params as deterministic Markdown bullets."""
+    if not params:
+        return ["- None"]
+    return [f"- `{name}`: `{value}`" for name, value in sorted(params.items())]
+
+
+def _best_trial_fold_rows(best_trial: Any | None) -> list[dict[str, Any]]:
+    """Return fold metrics attached to the selected winning trial."""
+    if best_trial is None:
+        return []
+    return list(best_trial.user_attrs.get("fold_metrics", []))
+
+
+def write_fold_tuning_report_markdown(
+    path: Path | str,
+    *,
+    summary: dict[str, Any],
+    best_trial: Any | None,
+    min_bcubed_recall: float | None,
+) -> None:
+    """Write a compact Markdown report for reviewing tuning tradeoffs."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    best_rows = _best_trial_fold_rows(best_trial)
+    best_trial_number = int(best_trial.number) if best_trial is not None else "None"
+    best_params = dict(best_trial.params) if best_trial is not None else {}
+    guardrail_text = (
+        f"B-cubed recall >= {_format_markdown_metric(min_bcubed_recall)} per fold"
+        if min_bcubed_recall is not None
+        else "Not set"
+    )
+    lines = [
+        "# Case-Fold Tuning Report",
+        "",
+        "## Study Summary",
+        "",
+        _markdown_table(
+            ["Item", "Value"],
+            [
+                ["Status", summary["status"]],
+                ["Study name", summary["study_name"]],
+                ["Optuna completed trial count", summary["n_trials_completed"]],
+                [
+                    "Objective-completed trial count",
+                    summary["objective_completed_trial_count"],
+                ],
+                ["Trusted trial count", summary["trusted_trial_count"]],
+                [
+                    "Best params artifact written",
+                    summary["best_params_artifact_written"],
+                ],
+                ["Best trial", best_trial_number],
+                ["Best value", _format_markdown_metric(summary["best_value"])],
+                ["Objective metric", summary["objective_metric"]],
+                ["Recall guardrail", guardrail_text],
+            ],
+        ),
+        "",
+        "## Best Params",
+        "",
+        *_format_params_for_markdown(best_params),
+        "",
+        "## Winning Trial Fold Metrics",
+        "",
+    ]
+    if best_rows:
+        lines.append(
+            _markdown_table(
+                [
+                    "Fold",
+                    "Held-out case",
+                    "B-cubed F0.5",
+                    "B-cubed P",
+                    "B-cubed R",
+                    "Pairwise P",
+                    "Pairwise R",
+                    "Pairwise F1",
+                    "Matching P",
+                    "Matching R",
+                    "Matching F1",
+                ],
+                [
+                    [
+                        row.get("fold_name", ""),
+                        row.get("held_out_case", ""),
+                        _format_markdown_metric(row.get("bcubed_f0_5", "")),
+                        _format_markdown_metric(row.get("bcubed_precision", "")),
+                        _format_markdown_metric(row.get("bcubed_recall", "")),
+                        _format_markdown_metric(row.get("pairwise_precision", "")),
+                        _format_markdown_metric(row.get("pairwise_recall", "")),
+                        _format_markdown_metric(row.get("pairwise_f1", "")),
+                        _format_markdown_metric(
+                            row.get("matching_pairwise_precision", "")
+                        ),
+                        _format_markdown_metric(
+                            row.get("matching_pairwise_recall", "")
+                        ),
+                        _format_markdown_metric(row.get("matching_pairwise_f1", "")),
+                    ]
+                    for row in best_rows
+                ],
+            )
+        )
+    else:
+        lines.append("No trusted winning trial was available.")
+    lines.append("")
+    path.write_text("\n".join(lines), encoding="utf-8")
+
+
 def run_case_fold_optuna_study(
     cases: dict[str, CaseFoldTuningCase],
     folds: list[CaseFoldTuningFold],
     output_root: Path | str,
     *,
     n_trials: int,
+    mode: str = "study",
     match_threshold: float = DEFAULT_MATCH_THRESHOLD,
     enable_shap: bool = False,
     storage: str | None = None,
     study_name: str | None = None,
+    min_bcubed_recall: float | None = None,
     failed_trial_value: float = DEFAULT_FAILED_TRIAL_VALUE,
     prepared_by_fold: dict[str, dict[str, PreparedCaseRun]] | None = None,
     fold_runner: FoldRunner = _run_trial_fold,
@@ -743,6 +1006,10 @@ def run_case_fold_optuna_study(
     """Run case-held-out Optuna tuning and write summary artifacts."""
     if n_trials < 1:
         raise ValueError("n_trials must be >= 1")
+    if mode not in VALID_TUNING_MODES:
+        raise ValueError(f"mode must be one of {sorted(VALID_TUNING_MODES)}")
+    if min_bcubed_recall is not None and not 0.0 <= min_bcubed_recall <= 1.0:
+        raise ValueError("min_bcubed_recall must be between 0.0 and 1.0")
     _validate_failed_trial_value(failed_trial_value)
 
     try:
@@ -793,16 +1060,21 @@ def run_case_fold_optuna_study(
     completed_trials = sum(
         trial.state == optuna.trial.TrialState.COMPLETE for trial in study.trials
     )
-    successful_trials = [
+    objective_completed_trials = [
         trial
         for trial in study.trials
         if trial.state == optuna.trial.TrialState.COMPLETE
         and trial.value is not None
         and trial.user_attrs.get("case_fold_status") == "completed"
     ]
+    trusted_trials = [
+        trial
+        for trial in objective_completed_trials
+        if _trial_passes_bcubed_recall_guardrail(trial, min_bcubed_recall)
+    ]
     best_trial = (
-        max(successful_trials, key=lambda trial: float(trial.value))
-        if successful_trials
+        max(trusted_trials, key=lambda trial: float(trial.value))
+        if trusted_trials
         else None
     )
     best_value = float(best_trial.value) if best_trial is not None else None
@@ -819,6 +1091,9 @@ def run_case_fold_optuna_study(
             storage=storage,
             study_name=study_name,
         )
+        stale_artifact_removed = False
+    else:
+        stale_artifact_removed = _remove_stale_best_params_artifact(output_root)
 
     summary = build_tuning_summary(
         enabled=True,
@@ -827,7 +1102,7 @@ def run_case_fold_optuna_study(
             if best_trial is not None
             else "completed_no_trusted_best_params"
         ),
-        mode="case_fold",
+        mode=mode,
         n_trials_requested=n_trials,
         n_trials_completed=completed_trials,
         best_value=best_value,
@@ -838,13 +1113,27 @@ def run_case_fold_optuna_study(
     summary.update(
         {
             "objective_metric": CASE_FOLD_OBJECTIVE_METRIC,
+            "tuning_scope": "case_fold",
             "fold_count": len(folds),
             "study_name": study.study_name,
             "storage": storage,
-            "successful_trial_count": len(successful_trials),
+            "optuna_completed_trial_count": completed_trials,
+            "objective_completed_trial_count": len(objective_completed_trials),
+            "trusted_trial_count": len(trusted_trials),
+            "successful_trial_count": len(trusted_trials),
+            "best_params": best_params,
+            "min_bcubed_recall": min_bcubed_recall,
+            "stale_best_params_artifact_removed": stale_artifact_removed,
             "case_fold_fingerprint_hash": fingerprint_hash,
             "generated_at": datetime.now(timezone.utc).isoformat(),
         }
+    )
+    write_fold_tuning_trials_csv(output_root / FOLD_TUNING_TRIALS_FILENAME, study)
+    write_fold_tuning_report_markdown(
+        output_root / FOLD_TUNING_REPORT_FILENAME,
+        summary=summary,
+        best_trial=best_trial,
+        min_bcubed_recall=min_bcubed_recall,
     )
     write_fold_summary_json(output_root / CASE_FOLD_STUDY_SUMMARY_FILENAME, summary)
     return summary

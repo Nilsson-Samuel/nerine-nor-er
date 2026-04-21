@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import csv
 import json
 import os
+import subprocess
+import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +19,7 @@ import pytest
 
 import src.matching.fold_preparation as fold_preparation
 import src.matching.fold_tuning as fold_tuning
+from scripts.run_case_fold_tuning import _build_default_output_root
 from src.matching import run as matching_run
 from src.matching.fold_preparation import get_prepared_case_manifest_path
 from src.matching.fold_tuning import (
@@ -23,6 +28,9 @@ from src.matching.fold_tuning import (
     CASE_FOLD_FINGERPRINT_HASH_ATTR,
     CASE_FOLD_OBJECTIVE_METRIC,
     DEFAULT_FAILED_TRIAL_VALUE,
+    FOLD_TUNING_REPORT_FILENAME,
+    FOLD_TUNING_SUMMARY_FILENAME,
+    FOLD_TUNING_TRIALS_FILENAME,
     CaseFoldTuningCase,
     CaseFoldTuningFold,
     PreparedCaseRun,
@@ -121,7 +129,7 @@ def _write_candidate_pairs(path: Path, run_id: str) -> None:
                 "blocking_methods": ["exact"],
                 "blocking_source": "exact",
                 "blocking_method_count": 1,
-            }
+            },
         ],
         schema=schemas.CANDIDATE_PAIRS_SCHEMA,
     )
@@ -164,7 +172,7 @@ def _write_labels(path: Path, run_id: str) -> None:
                 "entity_id_a": ENTITY_ID_C,
                 "entity_id_b": ENTITY_ID_D,
                 "label": 0,
-            }
+            },
         ],
         schema=LABELS_SCHEMA,
     )
@@ -1176,6 +1184,238 @@ def test_case_fold_study_writes_best_params_and_uses_persistent_storage(
         "subsample",
         "colsample_bytree",
     }
+
+
+def test_case_fold_study_writes_readable_tuning_reports(tmp_path: Path) -> None:
+    folds = [
+        CaseFoldTuningFold("fold_a", "case_a", ["case_b"]),
+        CaseFoldTuningFold("fold_b", "case_b", ["case_a"]),
+    ]
+
+    def fake_runner(
+        fold: CaseFoldTuningFold,
+        _prepared_runs: dict,
+        _trial_fold_dir: Path,
+        _params: dict,
+        _match_threshold: float,
+        _enable_shap: bool,
+        trial_number: int,
+    ) -> dict[str, Any]:
+        row = _fold_row(fold.name, 0.45 + (0.2 * trial_number))
+        row.update(
+            {
+                "held_out_case": fold.held_out_case,
+                "matching_pairwise_precision": 0.91,
+                "matching_pairwise_recall": 0.82,
+                "matching_pairwise_f1": 0.86,
+            }
+        )
+        return row
+
+    summary = run_case_fold_optuna_study(
+        cases={},
+        folds=folds,
+        output_root=tmp_path,
+        n_trials=2,
+        mode="study",
+        study_name="case_fold_demo",
+        prepared_by_fold=_prepared_by_fold_stub(tmp_path, folds),
+        fold_runner=fake_runner,
+    )
+    summary_payload = json.loads(
+        (tmp_path / FOLD_TUNING_SUMMARY_FILENAME).read_text(encoding="utf-8")
+    )
+    with (tmp_path / FOLD_TUNING_TRIALS_FILENAME).open(
+        encoding="utf-8",
+        newline="",
+    ) as handle:
+        trial_rows = list(csv.DictReader(handle))
+    report = (tmp_path / FOLD_TUNING_REPORT_FILENAME).read_text(encoding="utf-8")
+
+    assert summary["best_value"] == 0.65
+    assert summary_payload["best_params"]
+    assert summary_payload["n_trials_completed"] == 2
+    assert len(trial_rows) == 4
+    assert trial_rows[0]["fold_name"] == "fold_a"
+    assert trial_rows[0]["bcubed_f0_5"] == "0.45"
+    assert "Best Params" in report
+    assert "Optuna completed trial count" in report
+    assert "Objective-completed trial count" in report
+    assert "Trusted trial count" in report
+    assert "Best params artifact written" in report
+    assert "B-cubed R" in report
+    assert "Pairwise P" in report
+
+
+def test_case_fold_study_recall_guardrail_withholds_best_params(
+    tmp_path: Path,
+) -> None:
+    folds = [CaseFoldTuningFold("fold_a", "case_a", ["case_b"])]
+
+    def low_recall_runner(
+        fold: CaseFoldTuningFold,
+        _prepared_runs: dict,
+        _trial_fold_dir: Path,
+        _params: dict,
+        _match_threshold: float,
+        _enable_shap: bool,
+        _trial_number: int,
+    ) -> dict[str, Any]:
+        row = _fold_row(fold.name, 0.7)
+        row["bcubed_recall"] = 0.4
+        return row
+
+    summary = run_case_fold_optuna_study(
+        cases={},
+        folds=folds,
+        output_root=tmp_path,
+        n_trials=1,
+        min_bcubed_recall=0.8,
+        prepared_by_fold=_prepared_by_fold_stub(tmp_path, folds),
+        fold_runner=low_recall_runner,
+    )
+
+    assert summary["status"] == "completed_no_trusted_best_params"
+    assert summary["best_params_found"] is False
+    assert summary["objective_completed_trial_count"] == 1
+    assert summary["trusted_trial_count"] == 0
+    assert summary["successful_trial_count"] == 0
+    assert not (tmp_path / CASE_FOLD_BEST_PARAMS_FILENAME).exists()
+    assert (tmp_path / FOLD_TUNING_TRIALS_FILENAME).exists()
+
+
+def test_case_fold_study_removes_stale_best_params_when_guardrail_rejects_all(
+    tmp_path: Path,
+) -> None:
+    folds = [CaseFoldTuningFold("fold_a", "case_a", ["case_b"])]
+    prepared = _prepared_by_fold_stub(tmp_path, folds)
+
+    def trusted_runner(
+        fold: CaseFoldTuningFold,
+        _prepared_runs: dict,
+        _trial_fold_dir: Path,
+        _params: dict,
+        _match_threshold: float,
+        _enable_shap: bool,
+        _trial_number: int,
+    ) -> dict[str, Any]:
+        row = _fold_row(fold.name, 0.7)
+        row["bcubed_recall"] = 0.9
+        return row
+
+    first_summary = run_case_fold_optuna_study(
+        cases={},
+        folds=folds,
+        output_root=tmp_path,
+        n_trials=1,
+        prepared_by_fold=prepared,
+        fold_runner=trusted_runner,
+    )
+    assert first_summary["best_params_artifact_written"] is True
+    assert (tmp_path / CASE_FOLD_BEST_PARAMS_FILENAME).exists()
+
+    def low_recall_runner(
+        fold: CaseFoldTuningFold,
+        _prepared_runs: dict,
+        _trial_fold_dir: Path,
+        _params: dict,
+        _match_threshold: float,
+        _enable_shap: bool,
+        _trial_number: int,
+    ) -> dict[str, Any]:
+        row = _fold_row(fold.name, 0.8)
+        row["bcubed_recall"] = 0.2
+        return row
+
+    second_summary = run_case_fold_optuna_study(
+        cases={},
+        folds=folds,
+        output_root=tmp_path,
+        n_trials=1,
+        min_bcubed_recall=0.8,
+        prepared_by_fold=prepared,
+        fold_runner=low_recall_runner,
+    )
+
+    assert second_summary["status"] == "completed_no_trusted_best_params"
+    assert second_summary["objective_completed_trial_count"] == 1
+    assert second_summary["trusted_trial_count"] == 0
+    assert second_summary["stale_best_params_artifact_removed"] is True
+    assert not (tmp_path / CASE_FOLD_BEST_PARAMS_FILENAME).exists()
+
+
+@pytest.mark.parametrize(
+    "recall_value",
+    [None, "not-a-number", "nan", "inf", "-inf"],
+)
+def test_case_fold_study_guardrail_treats_malformed_recall_as_failure(
+    tmp_path: Path,
+    recall_value: Any,
+) -> None:
+    folds = [CaseFoldTuningFold("fold_a", "case_a", ["case_b"])]
+
+    def malformed_recall_runner(
+        fold: CaseFoldTuningFold,
+        _prepared_runs: dict,
+        _trial_fold_dir: Path,
+        _params: dict,
+        _match_threshold: float,
+        _enable_shap: bool,
+        _trial_number: int,
+    ) -> dict[str, Any]:
+        row = _fold_row(fold.name, 0.7)
+        if recall_value is None:
+            del row["bcubed_recall"]
+        else:
+            row["bcubed_recall"] = recall_value
+        return row
+
+    summary = run_case_fold_optuna_study(
+        cases={},
+        folds=folds,
+        output_root=tmp_path,
+        n_trials=1,
+        min_bcubed_recall=0.8,
+        prepared_by_fold=_prepared_by_fold_stub(tmp_path, folds),
+        fold_runner=malformed_recall_runner,
+    )
+
+    assert summary["status"] == "completed_no_trusted_best_params"
+    assert summary["objective_completed_trial_count"] == 1
+    assert summary["trusted_trial_count"] == 0
+    assert summary["best_params_artifact_written"] is False
+    assert (tmp_path / FOLD_TUNING_REPORT_FILENAME).exists()
+
+
+def test_case_fold_tuning_default_output_root_is_timestamped_and_fresh(
+    tmp_path: Path,
+) -> None:
+    now = datetime(2026, 4, 21, 12, 30, 15, tzinfo=timezone.utc)
+    first_path = _build_default_output_root(tmp_path, now=now)
+    first_path.mkdir(parents=True)
+
+    next_path = _build_default_output_root(tmp_path, now=now)
+
+    assert first_path == tmp_path / "case_fold_tuning_20260421T123015Z"
+    assert next_path == tmp_path / "case_fold_tuning_20260421T123015Z_02"
+
+
+def test_case_fold_tuning_runner_help_bootstraps_repo_root() -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+    env = {key: value for key, value in os.environ.items() if key != "PYTHONPATH"}
+
+    result = subprocess.run(
+        [sys.executable, "scripts/run_case_fold_tuning.py", "--help"],
+        cwd=repo_root,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert "Run case-held-out Optuna tuning" in result.stdout
+    assert "--storage" in result.stdout
 
 
 def test_case_fold_study_reuses_matching_persistent_fingerprint(
