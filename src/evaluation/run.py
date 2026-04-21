@@ -46,6 +46,7 @@ DEFAULT_MATCH_THRESHOLD = PAIR_MATCH_THRESHOLD
 DEFAULT_ALLOWED_METRIC_DROP = {
     "pairwise_f1": 0.03,
     "bcubed_f1": 0.03,
+    "bcubed_f0_5": 0.03,
     "ari": 0.05,
     "nmi": 0.05,
 }
@@ -406,7 +407,7 @@ def build_regression_checks(
         }
     )
 
-    required_metrics = ("pairwise_f1", "bcubed_f1", "ari", "nmi")
+    required_metrics = ("pairwise_f1", "bcubed_f1", "bcubed_f0_5", "ari", "nmi")
     for metric_name in required_metrics:
         value = metrics.get(metric_name)
         passed = isinstance(value, (int, float)) and math.isfinite(float(value))
@@ -1367,6 +1368,7 @@ def _write_evaluation_markdown(report: Mapping[str, Any], path: Path) -> None:
                 ["B-cubed precision", _format_markdown_metric(metrics["bcubed_precision"])],
                 ["B-cubed recall", _format_markdown_metric(metrics["bcubed_recall"])],
                 ["B-cubed F1", _format_markdown_metric(metrics["bcubed_f1"])],
+                ["B-cubed F0.5", _format_markdown_metric(metrics["bcubed_f0_5"])],
             ],
         ),
         "",
@@ -1636,7 +1638,7 @@ def _print_console_summary(
         f"ari={metrics['ari']:.3f} "
         f"nmi={metrics['nmi']:.3f} "
         f"bcubed={metrics['bcubed_precision']:.3f}/{metrics['bcubed_recall']:.3f}/"
-        f"{metrics['bcubed_f1']:.3f} "
+        f"{metrics['bcubed_f1']:.3f}/{metrics['bcubed_f0_5']:.3f} "
         f"checks={'passed' if report['regression_checks']['passed'] else 'failed'} "
         f"json={report_path} md={markdown_report_path}"
     )

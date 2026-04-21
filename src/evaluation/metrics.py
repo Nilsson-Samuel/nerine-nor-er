@@ -87,6 +87,7 @@ def clustering_metrics(
             "bcubed_precision": 0.0,
             "bcubed_recall": 0.0,
             "bcubed_f1": 0.0,
+            "bcubed_f0_5": 0.0,
         }
     gold_labels = [str(gold_membership_by_entity[entity_id]) for entity_id in entity_ids]
     predicted_labels = [
@@ -107,6 +108,7 @@ def clustering_metrics(
         "bcubed_precision": bcubed["precision"],
         "bcubed_recall": bcubed["recall"],
         "bcubed_f1": bcubed["f1"],
+        "bcubed_f0_5": bcubed["f0_5"],
     }
 
 
@@ -114,7 +116,7 @@ def bcubed_metrics(
     gold_membership_by_entity: Mapping[str, str],
     predicted_membership_by_entity: Mapping[str, str],
 ) -> MetricDict:
-    """Compute B-cubed precision/recall/F1 on aligned entity memberships."""
+    """Compute B-cubed precision/recall plus F1 and F0.5 scores."""
     entity_ids = _require_matching_entity_sets(
         gold_membership_by_entity,
         predicted_membership_by_entity,
@@ -136,7 +138,8 @@ def bcubed_metrics(
     return {
         "precision": precision,
         "recall": recall,
-        "f1": _f1(precision, recall),
+        "f1": _fbeta(precision, recall, beta=1.0),
+        "f0_5": _fbeta(precision, recall, beta=0.5),
     }
 
 
@@ -186,7 +189,13 @@ def _safe_divide(numerator: int, denominator: int) -> float:
 
 def _f1(precision: float, recall: float) -> float:
     """Compute the harmonic mean of precision and recall."""
-    denominator = precision + recall
+    return _fbeta(precision, recall, beta=1.0)
+
+
+def _fbeta(precision: float, recall: float, beta: float) -> float:
+    """Compute F-beta so precision-weighted cluster scores reuse one formula."""
+    beta_squared = beta * beta
+    denominator = beta_squared * precision + recall
     if denominator == 0.0:
         return 0.0
-    return float(2.0 * precision * recall / denominator)
+    return float((1.0 + beta_squared) * precision * recall / denominator)

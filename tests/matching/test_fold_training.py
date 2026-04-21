@@ -181,6 +181,7 @@ def test_fold_summary_row_and_csv_capture_key_metrics(tmp_path: Path) -> None:
             "bcubed_precision": 0.74,
             "bcubed_recall": 0.7,
             "bcubed_f1": 0.72,
+            "bcubed_f0_5": 0.73,
         },
         "stage_metrics": {
             "blocking": {"gold_positive_pair_recall": 0.9},
@@ -214,6 +215,7 @@ def test_fold_summary_row_and_csv_capture_key_metrics(tmp_path: Path) -> None:
     assert row["pairwise_f1"] == 0.61
     assert row["bcubed_precision"] == 0.74
     assert row["bcubed_recall"] == 0.7
+    assert row["bcubed_f0_5"] == 0.73
     assert row["blocking_positive_pair_recall"] == 0.9
     assert csv_rows == [
         {
@@ -234,6 +236,7 @@ def test_fold_summary_row_and_csv_capture_key_metrics(tmp_path: Path) -> None:
             "bcubed_precision": 0.74,
             "bcubed_recall": 0.7,
             "bcubed_f1": 0.72,
+            "bcubed_f0_5": 0.73,
             "blocking_positive_pair_recall": 0.9,
             "matching_pairwise_precision": 0.8,
             "matching_pairwise_recall": 0.5,
@@ -261,6 +264,7 @@ def test_fold_markdown_writers_include_full_metric_surface(tmp_path: Path) -> No
         "bcubed_precision": 0.74,
         "bcubed_recall": 0.7,
         "bcubed_f1": 0.72,
+        "bcubed_f0_5": 0.73,
         "blocking_positive_pair_recall": 0.9,
         "matching_pairwise_precision": 0.8,
         "matching_pairwise_recall": 0.5,
@@ -289,9 +293,11 @@ def test_fold_markdown_writers_include_full_metric_surface(tmp_path: Path) -> No
 
     assert "## Final Clustering Metrics" in fold_markdown
     assert "Pairwise precision" in fold_markdown
+    assert "B-cubed F0.5" in fold_markdown
     assert "/tmp/fold_demo/evaluation_report.md" in fold_markdown
     assert "macro_avg" in aggregate_markdown
     assert f"{macro_row['pairwise_f1']:.3f}" in aggregate_markdown
+    assert "B-cubed F0.5" in aggregate_markdown
 
 
 def test_fold_config_rejects_duplicate_train_cases() -> None:

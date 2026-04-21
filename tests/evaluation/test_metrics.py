@@ -59,6 +59,30 @@ def test_clustering_metrics_match_toy_merge_split_case() -> None:
     assert metrics["bcubed_precision"] == pytest.approx(2 / 3)
     assert metrics["bcubed_recall"] == pytest.approx(0.75)
     assert metrics["bcubed_f1"] == pytest.approx(12 / 17)
+    assert metrics["bcubed_f0_5"] == pytest.approx(15 / 22)
+
+
+def test_bcubed_metrics_include_precision_weighted_f_beta() -> None:
+    metrics = bcubed_metrics(
+        gold_membership_by_entity={
+            "e1": "g_a",
+            "e2": "g_a",
+            "e3": "g_b",
+            "e4": "g_b",
+        },
+        predicted_membership_by_entity={
+            "e1": "c_a",
+            "e2": "c_a",
+            "e3": "c_b",
+            "e4": "c_c",
+        },
+    )
+
+    assert metrics["precision"] == pytest.approx(1.0)
+    assert metrics["recall"] == pytest.approx(0.75)
+    assert metrics["f1"] == pytest.approx(6 / 7)
+    assert metrics["f0_5"] == pytest.approx(15 / 16)
+    assert metrics["f0_5"] > metrics["f1"]
 
 
 def test_bcubed_metrics_require_matching_entity_sets() -> None:

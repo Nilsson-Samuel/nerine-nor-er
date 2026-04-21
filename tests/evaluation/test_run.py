@@ -851,12 +851,14 @@ def test_run_evaluation_writes_report_and_labels(tmp_path: Path) -> None:
     assert persisted["stage_metrics"]["matching"]["evaluated_candidate_pair_count"] == 6
     assert persisted["metrics"]["pairwise_f1"] == 0.4
     assert persisted["metrics"]["bcubed_f1"] > 0.0
+    assert persisted["metrics"]["bcubed_f0_5"] > 0.0
     assert persisted["regression_checks"]["passed"] is True
     assert len(labels) == 6
     assert {row["label"] for row in labels} == {0, 1}
     assert report["metrics"]["pairwise_f1"] == 0.4
     assert "## Final Clustering / Resolution Metrics" in markdown_report
     assert "Pairwise precision" in markdown_report
+    assert "B-cubed F0.5" in markdown_report
     assert "## Regression Checks" in markdown_report
 
 
@@ -1011,6 +1013,7 @@ def test_run_evaluation_scores_only_confidently_bridged_subset(
     assert report["stage_metrics"]["matching"]["recall"] == pytest.approx(1.0)
     assert report["metrics"]["pairwise_f1"] == pytest.approx(1.0)
     assert report["metrics"]["bcubed_f1"] == pytest.approx(1.0)
+    assert report["metrics"]["bcubed_f0_5"] == pytest.approx(1.0)
 
 
 def test_run_evaluation_empty_confident_subset_reports_zero_metrics_and_fails_checks(
@@ -1031,6 +1034,7 @@ def test_run_evaluation_empty_confident_subset_reports_zero_metrics_and_fails_ch
     assert report["metric_scope"]["evaluation_candidate_pair_count"] == 0
     assert report["metrics"]["pairwise_f1"] == pytest.approx(0.0)
     assert report["metrics"]["bcubed_f1"] == pytest.approx(0.0)
+    assert report["metrics"]["bcubed_f0_5"] == pytest.approx(0.0)
     assert report["metrics"]["ari"] == pytest.approx(0.0)
     assert report["metrics"]["nmi"] == pytest.approx(0.0)
     assert report["regression_checks"]["passed"] is False
@@ -1126,6 +1130,7 @@ def test_build_regression_checks_flags_metric_drift(tmp_path: Path) -> None:
                 "metrics": {
                     "pairwise_f1": 0.8,
                     "bcubed_f1": 0.8,
+                    "bcubed_f0_5": 0.8,
                     "ari": 0.8,
                     "nmi": 0.8,
                 }
@@ -1140,6 +1145,7 @@ def test_build_regression_checks_flags_metric_drift(tmp_path: Path) -> None:
         metrics={
             "pairwise_f1": 0.4,
             "bcubed_f1": 0.5,
+            "bcubed_f0_5": 0.5,
             "ari": 0.5,
             "nmi": 0.5,
         },
@@ -1167,6 +1173,7 @@ def test_build_regression_checks_skips_missing_baseline_metrics(tmp_path: Path) 
         metrics={
             "pairwise_f1": 0.8,
             "bcubed_f1": 0.8,
+            "bcubed_f0_5": 0.8,
             "ari": 0.8,
             "nmi": 0.8,
         },
@@ -1195,6 +1202,7 @@ def test_build_regression_checks_fails_empty_metric_scope(tmp_path: Path) -> Non
         metrics={
             "pairwise_f1": 0.0,
             "bcubed_f1": 0.0,
+            "bcubed_f0_5": 0.0,
             "ari": 0.0,
             "nmi": 0.0,
         },

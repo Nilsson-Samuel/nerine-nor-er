@@ -36,6 +36,7 @@ FINAL_CLUSTERING_METRIC_FIELDS = (
     "bcubed_precision",
     "bcubed_recall",
     "bcubed_f1",
+    "bcubed_f0_5",
 )
 FINAL_CLUSTERING_METRIC_LABELS = {
     "pairwise_precision": "Pairwise precision",
@@ -46,6 +47,7 @@ FINAL_CLUSTERING_METRIC_LABELS = {
     "bcubed_precision": "B-cubed precision",
     "bcubed_recall": "B-cubed recall",
     "bcubed_f1": "B-cubed F1",
+    "bcubed_f0_5": "B-cubed F0.5",
 }
 
 
@@ -242,6 +244,7 @@ def build_fold_summary_row(
         "bcubed_precision": float(metrics["bcubed_precision"]),
         "bcubed_recall": float(metrics["bcubed_recall"]),
         "bcubed_f1": float(metrics["bcubed_f1"]),
+        "bcubed_f0_5": float(metrics["bcubed_f0_5"]),
         "blocking_positive_pair_recall": float(blocking_recall),
         "matching_pairwise_precision": float(matching["precision"]),
         "matching_pairwise_recall": float(matching["recall"]),
@@ -407,6 +410,7 @@ def write_aggregate_fold_reports_markdown(
                 "B-cubed P",
                 "B-cubed R",
                 "B-cubed F1",
+                "B-cubed F0.5",
                 "Blocking recall",
                 "Matching P",
                 "Matching R",
@@ -424,6 +428,7 @@ def write_aggregate_fold_reports_markdown(
                     _format_markdown_metric(row["bcubed_precision"]),
                     _format_markdown_metric(row["bcubed_recall"]),
                     _format_markdown_metric(row["bcubed_f1"]),
+                    _format_markdown_metric(row["bcubed_f0_5"]),
                     _format_markdown_metric(row["blocking_positive_pair_recall"]),
                     _format_markdown_metric(row["matching_pairwise_precision"]),
                     _format_markdown_metric(row["matching_pairwise_recall"]),
@@ -443,6 +448,7 @@ def write_aggregate_fold_reports_markdown(
                     _format_markdown_metric(macro_row["bcubed_precision"]),
                     _format_markdown_metric(macro_row["bcubed_recall"]),
                     _format_markdown_metric(macro_row["bcubed_f1"]),
+                    _format_markdown_metric(macro_row["bcubed_f0_5"]),
                     "-",
                     "-",
                     "-",
