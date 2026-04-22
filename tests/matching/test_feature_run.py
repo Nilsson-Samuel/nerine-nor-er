@@ -17,6 +17,7 @@ EXPECTED_FEATURE_COLUMNS = [
     "token_jaccard_similarity",
     "token_containment_ratio",
     "char_trigram_jaccard_similarity",
+    "exact_canonical_name_match",
     "abbreviation_match_flag",
     "double_metaphone_overlap_flag",
     "cosine_sim_entity",
@@ -57,7 +58,7 @@ def test_run_features_output_columns_match_contract(handoff_dir: Path) -> None:
     features = pl.read_parquet(get_features_output_path(handoff_dir, DEFAULT_RUN_ID))
 
     assert features.columns == EXPECTED_OUTPUT_COLUMNS
-    assert len(EXPECTED_FEATURE_COLUMNS) == 14
+    assert len(EXPECTED_FEATURE_COLUMNS) == 15
     for column in EXPECTED_FEATURE_COLUMNS:
         assert features[column].null_count() == 0
 

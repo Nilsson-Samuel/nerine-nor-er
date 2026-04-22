@@ -7,7 +7,7 @@ Covers per-helper validation:
 - Known pair: hand-crafted input with expected approximate values.
 
 Integration test for build_string_features:
-- All 7 feature columns present.
+- All 8 feature columns present.
 - No null values.
 - Key columns preserved.
 """
@@ -24,6 +24,7 @@ from src.matching.features import (
     build_string_features,
     char_trigram_jaccard_similarity,
     double_metaphone_overlap_flag,
+    exact_canonical_name_match,
     jaro_winkler_similarity,
     levenshtein_ratio_similarity,
     load_pairs_with_names,
@@ -42,6 +43,7 @@ _SIMILARITY_FUNCS = [
 
 # Flag helpers (return int in {0, 1})
 _FLAG_FUNCS = [
+    exact_canonical_name_match,
     abbreviation_match_flag,
     double_metaphone_overlap_flag,
 ]
@@ -250,6 +252,32 @@ def test_metaphone_single_char_tokens_skipped():
     assert double_metaphone_overlap_flag("a b", "a b") == 0
 
 
+def test_exact_canonical_name_match_identical_normalized_names():
+    assert exact_canonical_name_match("per hansen", "per hansen") == 1
+
+
+def test_exact_canonical_name_match_different_names():
+    assert exact_canonical_name_match("per hansen", "per johansen") == 0
+
+
+def test_exact_canonical_name_match_case_difference():
+    assert exact_canonical_name_match("DNB ASA", "dnb asa") == 1
+
+
+def test_exact_canonical_name_match_unicode_normalization():
+    assert exact_canonical_name_match("Ålesund", "A\u030alesund") == 1
+
+
+def test_exact_canonical_name_match_outer_whitespace():
+    assert exact_canonical_name_match("  DNB ASA", "dnb asa  ") == 1
+
+
+def test_exact_canonical_name_match_empty_or_null_inputs():
+    assert exact_canonical_name_match("", "dnb asa") == 0
+    assert exact_canonical_name_match("   ", "dnb asa") == 0
+    assert exact_canonical_name_match(None, "dnb asa") == 0
+
+
 # ---------------------------------------------------------------------------
 # build_string_features — integration against mock fixture
 # ---------------------------------------------------------------------------
@@ -295,7 +323,7 @@ def test_build_similarity_range(handoff_dir: Path):
 def test_build_flag_values(handoff_dir: Path):
     pairs = load_pairs_with_names(handoff_dir, DEFAULT_RUN_ID)
     result = build_string_features(pairs)
-    flag_cols = STRING_FEATURE_COLUMNS[5:]  # last 2 are flags
+    flag_cols = STRING_FEATURE_COLUMNS[5:]  # last 3 are flags
     for col in flag_cols:
         unique = set(result[col].to_list())
         assert unique <= {0, 1}, f"{col} has values outside {{0, 1}}: {unique}"
@@ -316,6 +344,7 @@ def test_build_identical_pair_scores_high(handoff_dir: Path):
         sims_all_one = all(row[c] == 1.0 for c in sim_cols)
         if sims_all_one:
             # Verify flags are also 1
+            assert row["exact_canonical_name_match"] == 1
             assert row["abbreviation_match_flag"] == 1
             assert row["double_metaphone_overlap_flag"] == 1
             return
@@ -325,8 +354,8 @@ def test_build_identical_pair_scores_high(handoff_dir: Path):
 def test_build_column_count(handoff_dir: Path):
     pairs = load_pairs_with_names(handoff_dir, DEFAULT_RUN_ID)
     result = build_string_features(pairs)
-    # 3 key columns + 7 feature columns = 10 total
-    assert len(result.columns) == 10
+    # 3 key columns + 8 feature columns = 11 total
+    assert len(result.columns) == 11
 
 
 def test_build_excludes_name_columns(handoff_dir: Path):

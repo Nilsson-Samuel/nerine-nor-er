@@ -32,6 +32,7 @@ from src.matching.writer import (
     write_scoring_metadata,
 )
 from src.shared import schemas
+from src.shared.config import PAIR_MATCH_THRESHOLD
 from src.shared.paths import get_blocking_run_output_dir
 
 
@@ -57,6 +58,74 @@ SCORED_OUTPUT_COLUMNS = [
     "blocking_method_count",
     "shap_top5",
 ]
+NO_EVIDENCE_SCORE_CAP_RULE_NAME = "no_evidence_score_cap"
+NO_EVIDENCE_SCORE_CAP_MARGIN = 0.01
+NO_EVIDENCE_SCORE_CAP = PAIR_MATCH_THRESHOLD - NO_EVIDENCE_SCORE_CAP_MARGIN
+NO_EVIDENCE_ZERO_FLAG_COLUMNS = [
+    "abbreviation_match_flag",
+    "double_metaphone_overlap_flag",
+    "first_name_match",
+    "last_name_match",
+    "norwegian_id_match",
+    "exact_canonical_name_match",
+]
+
+
+def _no_evidence_candidate_mask(features_df: pl.DataFrame) -> pl.Series:
+    """Identify candidate pairs with no lexical, phonetic, name, or ID evidence."""
+    no_direct_flags = pl.all_horizontal(
+        [pl.col(column) == 0 for column in NO_EVIDENCE_ZERO_FLAG_COLUMNS]
+    )
+    return features_df.select(
+        (
+            (pl.col("token_jaccard_similarity") == 0)
+            & no_direct_flags
+            & (pl.col("jaro_winkler_similarity") < 0.50)
+            & (pl.col("levenshtein_ratio_similarity") < 0.20)
+            & (pl.col("char_trigram_jaccard_similarity") == 0)
+        ).alias("no_evidence")
+    )["no_evidence"]
+
+
+def count_no_evidence_scores_above_cap(
+    features_df: pl.DataFrame,
+    scores: list[float],
+) -> int:
+    """Count no-evidence pairs whose raw model score is above the safety cap."""
+    if features_df.height != len(scores):
+        raise ValueError("feature rows must align one-to-one with scores")
+
+    mask = _no_evidence_candidate_mask(features_df)
+    return (
+        pl.DataFrame(
+            {
+                "score": pl.Series(scores, dtype=pl.Float64),
+                "no_evidence": mask,
+            }
+        )
+        .filter(pl.col("no_evidence") & (pl.col("score") > NO_EVIDENCE_SCORE_CAP))
+        .height
+    )
+
+
+def apply_no_evidence_score_cap(features_df: pl.DataFrame, scores: list[float]) -> list[float]:
+    """Cap scores for pairs that have no direct matching evidence."""
+    if features_df.height != len(scores):
+        raise ValueError("feature rows must align one-to-one with scores")
+
+    mask = _no_evidence_candidate_mask(features_df)
+    capped = pl.DataFrame(
+        {
+            "score": pl.Series(scores, dtype=pl.Float64),
+            "no_evidence": mask,
+        }
+    ).select(
+        pl.when(pl.col("no_evidence") & (pl.col("score") > NO_EVIDENCE_SCORE_CAP))
+        .then(pl.lit(NO_EVIDENCE_SCORE_CAP))
+        .otherwise(pl.col("score"))
+        .alias("score")
+    )
+    return capped["score"].to_list()
 
 
 def _feature_diagnostic_values(
@@ -129,7 +198,7 @@ def run_features(data_dir: Path | str, run_id: str) -> pl.DataFrame:
         run_id: Pipeline run identifier.
 
     Returns:
-        Feature table with pair key columns and 14 feature columns.
+        Feature table with pair key columns and 15 feature columns.
     """
     t0 = time.monotonic()
     data_dir = Path(data_dir)
@@ -275,6 +344,7 @@ def _build_scoring_metadata(
     tuning_summary: dict[str, Any],
     enable_shap: bool,
     explained_row_count: int,
+    no_evidence_capped_row_count: int,
 ) -> dict[str, Any]:
     """Build one JSON metadata payload for scoring-side optional hooks."""
     return {
@@ -289,6 +359,14 @@ def _build_scoring_metadata(
             "generated": explained_row_count > 0,
             "explained_row_count": explained_row_count,
             "row_count": row_count,
+        },
+        NO_EVIDENCE_SCORE_CAP_RULE_NAME: {
+            "enabled": True,
+            "cap": NO_EVIDENCE_SCORE_CAP,
+            "cap_margin": NO_EVIDENCE_SCORE_CAP_MARGIN,
+            "pair_match_threshold": PAIR_MATCH_THRESHOLD,
+            "capped_row_count": no_evidence_capped_row_count,
+            "rule_name": NO_EVIDENCE_SCORE_CAP_RULE_NAME,
         },
     }
 
@@ -326,6 +404,8 @@ def run_scoring(
     )
     booster, metadata = load_lightgbm_artifacts(model_dir)
     scores = score_lightgbm(booster, features_df.select(FEATURE_COLUMNS)).tolist()
+    no_evidence_capped_row_count = count_no_evidence_scores_above_cap(features_df, scores)
+    scores = apply_no_evidence_score_cap(features_df, scores)
     shap_top5 = explain_lightgbm_top5(
         booster,
         features_df.select(FEATURE_COLUMNS),
@@ -364,6 +444,7 @@ def run_scoring(
             tuning_summary=tuning_summary,
             enable_shap=enable_shap,
             explained_row_count=explained_row_count,
+            no_evidence_capped_row_count=no_evidence_capped_row_count,
         ),
         output_dir,
     )

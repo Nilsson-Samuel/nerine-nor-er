@@ -91,6 +91,7 @@ COSINE_COLUMNS = [
     "cosine_sim_context",
 ]
 BINARY_COLUMNS = [
+    "exact_canonical_name_match",
     "abbreviation_match_flag",
     "double_metaphone_overlap_flag",
     "norwegian_id_match",
@@ -240,7 +241,7 @@ def test_run_features_on_synthetic_data_produces_complete_feature_matrix(
     features = run_features(data_dir, run_id)
 
     assert features.columns == FEATURE_OUTPUT_COLUMNS
-    assert len(FEATURE_COLUMNS) == 14
+    assert len(FEATURE_COLUMNS) == 15
     assert features.height > 0
     for column in FEATURE_COLUMNS:
         assert features[column].null_count() == 0

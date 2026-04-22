@@ -12,7 +12,12 @@ from lightgbm import LGBMClassifier
 from sklearn.model_selection import train_test_split
 
 from src.matching.run import run_features
-from src.matching.reranker import evaluate_lightgbm, train_lightgbm
+from src.matching.reranker import (
+    BASELINE_LIGHTGBM_PARAMS,
+    evaluate_lightgbm,
+    save_lightgbm_artifacts,
+    train_lightgbm,
+)
 from src.synthetic.build_matching_dataset import build_matching_dataset, load_labeled_feature_matrix
 
 
@@ -112,15 +117,39 @@ def _split_labeled_data(
 
 def test_train_lightgbm_runs_end_to_end_on_synthetic_features(
     synthetic_training_dir: tuple[Path, str],
+    tmp_path: Path,
 ) -> None:
     data_dir, run_id = synthetic_training_dir
     X, y = load_labeled_feature_matrix(data_dir, run_id)
 
     model = train_lightgbm(X, y)
+    metadata = save_lightgbm_artifacts(model, tmp_path / "model")
 
     assert isinstance(model, LGBMClassifier)
     assert model.booster_.num_feature() == X.width
     assert model.booster_.feature_name() == X.columns
+    assert metadata["training_params"]["num_leaves"] == 15
+    assert metadata["training_params"]["min_child_samples"] == 40
+    assert metadata["training_params"]["reg_lambda"] == 3.0
+    assert metadata["training_params"]["subsample"] == 0.9
+    assert metadata["training_params"]["colsample_bytree"] == 0.9
+
+
+def test_baseline_lightgbm_defaults_are_conservative() -> None:
+    assert BASELINE_LIGHTGBM_PARAMS["learning_rate"] == 0.05
+    assert BASELINE_LIGHTGBM_PARAMS["n_estimators"] == 120
+    assert BASELINE_LIGHTGBM_PARAMS["num_leaves"] == 15
+    assert BASELINE_LIGHTGBM_PARAMS["min_child_samples"] == 40
+    assert BASELINE_LIGHTGBM_PARAMS["reg_lambda"] == 3.0
+    assert BASELINE_LIGHTGBM_PARAMS["subsample"] == 0.9
+    assert BASELINE_LIGHTGBM_PARAMS["subsample_freq"] == 1
+    assert BASELINE_LIGHTGBM_PARAMS["colsample_bytree"] == 0.9
+    assert BASELINE_LIGHTGBM_PARAMS["random_state"] == 7
+    assert BASELINE_LIGHTGBM_PARAMS["feature_fraction_seed"] == 7
+    assert BASELINE_LIGHTGBM_PARAMS["bagging_seed"] == 7
+    assert BASELINE_LIGHTGBM_PARAMS["data_random_seed"] == 7
+    assert BASELINE_LIGHTGBM_PARAMS["force_col_wise"] is True
+    assert BASELINE_LIGHTGBM_PARAMS["n_jobs"] == 1
 
 
 def test_evaluate_lightgbm_returns_finite_metrics_in_unit_interval(

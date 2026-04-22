@@ -7,7 +7,7 @@ Includes:
 - Structured identity flags from context/name/type fields.
 - Co-occurrence/blocking metadata features.
 - String/token features computed in a column-oriented pass: 5 similarity
-  scores in [0,1] and 2 binary flags in {0,1}.
+  scores in [0,1] and 3 binary flags in {0,1}.
 """
 
 from functools import lru_cache
@@ -624,6 +624,20 @@ def char_trigram_jaccard_similarity(a: str, b: str) -> float:
     return len(tgrams_a & tgrams_b) / len(tgrams_a | tgrams_b)
 
 
+def _normalize_exact_name(name: str | None) -> str:
+    """Normalize a full name for exact equality without changing token structure."""
+    return unicodedata.normalize("NFC", name.strip()).casefold() if name else ""
+
+
+def exact_canonical_name_match(name_a: str | None, name_b: str | None) -> int:
+    """Return 1 if both non-empty names match after trim, Unicode, and case normalization."""
+    normalized_a = _normalize_exact_name(name_a)
+    normalized_b = _normalize_exact_name(name_b)
+    if not normalized_a or not normalized_b:
+        return 0
+    return int(normalized_a == normalized_b)
+
+
 def _is_abbreviation(short: str, long: str) -> bool:
     """True if short is plausibly a prefix-abbreviation of long."""
     # Normalize dots to spaces so "D.N.B." tokenizes as ["D", "N", "B"].
@@ -672,26 +686,27 @@ def double_metaphone_overlap_flag(a: str, b: str) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Aggregate builder: applies all 7 string/token features in one column-oriented pass
+# Aggregate builder: applies all string/token features in one column-oriented pass
 # ---------------------------------------------------------------------------
 
-# Column names for the 7 string/token features.
+# Column names for string/token features.
 STRING_FEATURE_COLUMNS = [
     "jaro_winkler_similarity",
     "levenshtein_ratio_similarity",
     "token_jaccard_similarity",
     "token_containment_ratio",
     "char_trigram_jaccard_similarity",
+    "exact_canonical_name_match",
     "abbreviation_match_flag",
     "double_metaphone_overlap_flag",
 ]
 
 
 def build_string_features(pairs_df: pl.DataFrame) -> pl.DataFrame:
-    """Compute 7 string/token features for each candidate pair.
+    """Compute string/token features for each candidate pair.
 
     Accepts the output of load_pairs_with_names (columns: run_id, entity_id_a,
-    entity_id_b, name_a, name_b). Returns pair key columns + 7 feature columns.
+    entity_id_b, name_a, name_b). Returns pair key columns + string feature columns.
     No nulls in the output — empty/None names are treated as empty strings.
     Uses cached helper preprocessing to reduce repeated Python work on common
     names across large pair tables.
@@ -701,7 +716,7 @@ def build_string_features(pairs_df: pl.DataFrame) -> pl.DataFrame:
 
     Returns:
         Polars DataFrame with columns [run_id, entity_id_a, entity_id_b]
-        plus 7 feature columns listed in STRING_FEATURE_COLUMNS.
+        plus feature columns listed in STRING_FEATURE_COLUMNS.
     """
     if pairs_df.is_empty():
         return pl.DataFrame(
@@ -714,6 +729,7 @@ def build_string_features(pairs_df: pl.DataFrame) -> pl.DataFrame:
                 "token_jaccard_similarity": pl.Float64,
                 "token_containment_ratio": pl.Float64,
                 "char_trigram_jaccard_similarity": pl.Float64,
+                "exact_canonical_name_match": pl.Int64,
                 "abbreviation_match_flag": pl.Int64,
                 "double_metaphone_overlap_flag": pl.Int64,
             }
@@ -748,6 +764,11 @@ def build_string_features(pairs_df: pl.DataFrame) -> pl.DataFrame:
             "char_trigram_jaccard_similarity",
             [char_trigram_jaccard_similarity(a, b) for a, b in zip(names_a, names_b)],
             dtype=pl.Float64,
+        ),
+        pl.Series(
+            "exact_canonical_name_match",
+            [exact_canonical_name_match(a, b) for a, b in zip(names_a, names_b)],
+            dtype=pl.Int64,
         ),
         pl.Series(
             "abbreviation_match_flag",
