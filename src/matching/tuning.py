@@ -96,13 +96,15 @@ def suggest_lightgbm_params(trial: Any) -> dict[str, Any]:
     """Suggested LightGBM search space for reranker tuning."""
     return {
         # Keep learning conservative so small feature sets do not overreact to noise.
-        "learning_rate": trial.suggest_float("learning_rate", 0.02, 0.15, log=True),
-        # Moderate tree counts are enough for smoke/study runs without turning cost up too fast.
-        "n_estimators": trial.suggest_int("n_estimators", 80, 220, step=20),
-        # Control tree complexity while still allowing useful interaction splits.
+        "learning_rate": trial.suggest_float("learning_rate", 0.02, 0.10, log=True),
+        # Include the default tree count while keeping trials bounded for case-fold runs.
+        "n_estimators": trial.suggest_int("n_estimators", 100, 400, step=20),
+        # Control tree complexity while allowing useful interaction splits.
         "num_leaves": trial.suggest_int("num_leaves", 15, 63),
-        # Prevent tiny leaves from fitting sparse pairwise quirks too aggressively.
-        "min_child_samples": trial.suggest_int("min_child_samples", 3, 20),
+        # Keep leaves regularized enough for small folds while allowing larger studies to scale.
+        "min_child_samples": trial.suggest_int("min_child_samples", 10, 100),
+        # Tune L2 regularization so studies can rediscover the default conservative setting.
+        "reg_lambda": trial.suggest_float("reg_lambda", 0.5, 20.0, log=True),
         # Row subsampling adds a bit of regularization without making runs unstable.
         "subsample": trial.suggest_float("subsample", 0.7, 1.0),
         # Column subsampling reduces overreliance on a few strong similarity features.

@@ -1238,6 +1238,7 @@ def test_case_fold_study_writes_best_params_and_uses_persistent_storage(
         "n_estimators",
         "num_leaves",
         "min_child_samples",
+        "reg_lambda",
         "subsample",
         "colsample_bytree",
     }
