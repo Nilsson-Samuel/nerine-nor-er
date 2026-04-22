@@ -611,6 +611,11 @@ def _write_failed_trial_summary(
     return float(failed_trial_value)
 
 
+def _remove_trial_fold_artifacts(trial_fold_dir: Path) -> None:
+    """Drop heavy per-fold debug outputs after the metric row has been captured."""
+    shutil.rmtree(trial_fold_dir, ignore_errors=True)
+
+
 def _link_or_copy_file(source: Path, destination: Path) -> None:
     """Hardlink large reusable artifacts, falling back to a normal copy."""
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -803,6 +808,7 @@ def case_fold_objective(
     failed_trial_value: float = DEFAULT_FAILED_TRIAL_VALUE,
     pairwise_beta: float = DEFAULT_PAIRWISE_BETA,
     fold_runner: FoldRunner = _run_trial_fold,
+    keep_trial_artifacts: bool = False,
 ) -> float:
     """Run one Optuna trial and return macro held-out case clustering quality."""
     _validate_failed_trial_value(failed_trial_value)
@@ -817,11 +823,12 @@ def case_fold_objective(
     rows: list[dict[str, Any]] = []
     for fold in folds:
         prepared_runs = prepared_by_fold[fold.name]
+        trial_fold_dir = trial_dir / fold.name
         try:
             row = fold_runner(
                 fold,
                 prepared_runs,
-                trial_dir / fold.name,
+                trial_fold_dir,
                 params,
                 match_threshold,
                 enable_shap,
@@ -829,7 +836,11 @@ def case_fold_objective(
             )
             row.update(resolution_thresholds)
             rows.append(row)
+            if not keep_trial_artifacts:
+                _remove_trial_fold_artifacts(trial_fold_dir)
         except Exception as exc:
+            if not keep_trial_artifacts:
+                _remove_trial_fold_artifacts(trial_fold_dir)
             return _write_failed_trial_summary(
                 trial,
                 trial_dir,
@@ -1252,6 +1263,7 @@ def run_case_fold_optuna_study(
     failed_trial_value: float = DEFAULT_FAILED_TRIAL_VALUE,
     prepared_by_fold: dict[str, dict[str, PreparedCaseRun]] | None = None,
     fold_runner: FoldRunner = _run_trial_fold,
+    keep_trial_artifacts: bool = False,
 ) -> dict[str, Any]:
     """Run case-held-out Optuna tuning and write summary artifacts."""
     if n_trials < 1:
@@ -1305,6 +1317,7 @@ def run_case_fold_optuna_study(
             failed_trial_value=failed_trial_value,
             pairwise_beta=pairwise_beta,
             fold_runner=fold_runner,
+            keep_trial_artifacts=keep_trial_artifacts,
         ),
         n_trials=n_trials,
         show_progress_bar=False,
@@ -1390,6 +1403,10 @@ def run_case_fold_optuna_study(
             "best_resolution_thresholds": best_resolution_thresholds,
             "pairwise_beta": float(pairwise_beta),
             "min_pairwise_recall": min_pairwise_recall,
+            "keep_trial_artifacts": keep_trial_artifacts,
+            "trial_artifact_retention": (
+                "full" if keep_trial_artifacts else "summary_only"
+            ),
             "stale_best_params_artifact_removed": stale_artifact_removed,
             "case_fold_fingerprint_hash": fingerprint_hash,
             "generated_at": datetime.now(timezone.utc).isoformat(),

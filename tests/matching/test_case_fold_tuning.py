@@ -796,6 +796,75 @@ def test_case_fold_objective_macro_averages_fake_fold_results(tmp_path: Path) ->
     assert trial.user_attrs["case_fold_status"] == "completed"
 
 
+def test_case_fold_objective_removes_trial_fold_artifacts_by_default(
+    tmp_path: Path,
+) -> None:
+    folds = [CaseFoldTuningFold("fold_a", "case_a", ["case_b"])]
+    trial = DummyTrial()
+
+    def fake_runner(
+        fold: CaseFoldTuningFold,
+        _prepared_runs: dict,
+        trial_fold_dir: Path,
+        _params: dict,
+        _match_threshold: float,
+        _enable_shap: bool,
+        _trial_number: int,
+    ) -> dict[str, Any]:
+        _write_dummy_artifact(trial_fold_dir / "case_run" / "heavy.json", b"debug")
+        return _fold_row(fold.name, 0.7)
+
+    value = case_fold_objective(
+        trial,
+        folds,
+        _prepared_by_fold_stub(tmp_path, folds),
+        tmp_path,
+        fold_runner=fake_runner,
+    )
+
+    assert value == pytest.approx(0.7)
+    assert not (tmp_path / "trials" / "trial_0003" / "fold_a").exists()
+    assert (tmp_path / "trials" / "trial_0003" / "trial_summary.json").exists()
+    assert (tmp_path / "trials" / "trial_0003" / "fold_metrics.csv").exists()
+
+
+def test_case_fold_objective_can_keep_trial_fold_artifacts(
+    tmp_path: Path,
+) -> None:
+    folds = [CaseFoldTuningFold("fold_a", "case_a", ["case_b"])]
+    trial = DummyTrial()
+
+    def fake_runner(
+        fold: CaseFoldTuningFold,
+        _prepared_runs: dict,
+        trial_fold_dir: Path,
+        _params: dict,
+        _match_threshold: float,
+        _enable_shap: bool,
+        _trial_number: int,
+    ) -> dict[str, Any]:
+        _write_dummy_artifact(trial_fold_dir / "case_run" / "heavy.json", b"debug")
+        return _fold_row(fold.name, 0.7)
+
+    case_fold_objective(
+        trial,
+        folds,
+        _prepared_by_fold_stub(tmp_path, folds),
+        tmp_path,
+        fold_runner=fake_runner,
+        keep_trial_artifacts=True,
+    )
+
+    assert (
+        tmp_path
+        / "trials"
+        / "trial_0003"
+        / "fold_a"
+        / "case_run"
+        / "heavy.json"
+    ).exists()
+
+
 def test_case_fold_objective_penalizes_failed_fold(tmp_path: Path) -> None:
     folds = [CaseFoldTuningFold("fold_a", "case_a", ["case_b"])]
     trial = DummyTrial()
@@ -1498,6 +1567,7 @@ def test_case_fold_tuning_runner_help_bootstraps_repo_root() -> None:
     assert "--pairwise-beta" in result.stdout
     assert "--min-pairwise-recall" in result.stdout
     assert "--storage" in result.stdout
+    assert "--keep-trial-artifacts" in result.stdout
 
 
 def test_case_fold_study_reuses_matching_persistent_fingerprint(

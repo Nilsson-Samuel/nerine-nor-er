@@ -96,6 +96,14 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_STUDY_NAME,
         help="Stable Optuna study name for persistent storage.",
     )
+    parser.add_argument(
+        "--keep-trial-artifacts",
+        action="store_true",
+        help=(
+            "Keep full per-trial fold run directories for debugging. By default, "
+            "fold artifacts are deleted after metrics or failure details are recorded."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -176,6 +184,7 @@ def main() -> int:
         min_pairwise_recall=args.min_pairwise_recall,
         storage=args.storage,
         study_name=args.study_name,
+        keep_trial_artifacts=args.keep_trial_artifacts,
     )
     logger.info(
         "Case-fold tuning complete: %s trials written under %s",
