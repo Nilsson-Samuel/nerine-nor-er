@@ -3,7 +3,7 @@
 The regular tuning path optimizes pair labels inside one scoring run. This
 module keeps a separate, case-aware objective: each trial trains a fold model,
 scores the held-out case, runs resolution, and averages final clustering
-B-cubed F0.5 across folds.
+pairwise F-beta across folds.
 Make sure you have enough cases for to ensure a reliable generalized model.
 """
 
@@ -23,6 +23,7 @@ from typing import Any
 import pyarrow.parquet as pq
 import polars as pl
 
+from src.evaluation.metrics import pairwise_f_beta_from_metrics
 from src.evaluation.run import DEFAULT_MATCH_THRESHOLD, run_evaluation
 from src.matching.fold_preparation import (
     CaseFoldTuningCase,
@@ -69,22 +70,48 @@ FOLD_TUNING_TRIALS_FILENAME = "fold_tuning_trials.csv"
 FOLD_TUNING_REPORT_FILENAME = "fold_tuning_report.md"
 CASE_FOLD_STUDY_SUMMARY_FILENAME = FOLD_TUNING_SUMMARY_FILENAME
 TRIAL_SUMMARY_FILENAME = "trial_summary.json"
-CASE_FOLD_OBJECTIVE_METRIC = "bcubed_f0_5"
+CASE_FOLD_OBJECTIVE_METRIC = "pairwise_f_beta"
+CASE_FOLD_OBJECTIVE_NAME = "macro_mean_held_out_case_pairwise_f_beta"
 CASE_FOLD_FINGERPRINT_ATTR = "case_fold_fingerprint"
 CASE_FOLD_FINGERPRINT_HASH_ATTR = "case_fold_fingerprint_hash"
-CASE_FOLD_STUDY_FINGERPRINT_VERSION = 3
-CASE_FOLD_OBJECTIVE_VERSION = 1
+CASE_FOLD_STUDY_FINGERPRINT_VERSION = 4
+CASE_FOLD_OBJECTIVE_VERSION = 2
 CASE_FOLD_SEARCH_SPACE_VERSION = 1
 DEFAULT_FAILED_TRIAL_VALUE = -1.0
+DEFAULT_PAIRWISE_BETA = 0.5
 
 
 FoldRunner = Callable[..., dict[str, Any]]
 
 
 def _validate_failed_trial_value(failed_trial_value: float) -> None:
-    """Keep failed trials outside the valid B-cubed metric range."""
+    """Keep failed trials outside the valid objective metric range."""
     if failed_trial_value >= 0.0:
         raise ValueError("failed_trial_value must be < 0.0")
+
+
+def _validate_pairwise_beta(pairwise_beta: float) -> None:
+    """Keep the F-beta objective finite and mathematically meaningful."""
+    try:
+        beta = float(pairwise_beta)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("pairwise_beta must be positive and finite") from exc
+    if not math.isfinite(beta) or beta <= 0.0:
+        raise ValueError("pairwise_beta must be positive and finite")
+
+
+def _validate_min_pairwise_recall(min_pairwise_recall: float | None) -> None:
+    """Validate the optional usefulness guardrail for trusted best params."""
+    if min_pairwise_recall is None:
+        return
+    try:
+        recall = float(min_pairwise_recall)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("min_pairwise_recall must be between 0.0 and 1.0") from exc
+    if not math.isfinite(recall):
+        raise ValueError("min_pairwise_recall must be between 0.0 and 1.0")
+    if not 0.0 <= recall <= 1.0:
+        raise ValueError("min_pairwise_recall must be between 0.0 and 1.0")
 
 
 def _build_case_fold_study_fingerprint(
@@ -94,6 +121,8 @@ def _build_case_fold_study_fingerprint(
     match_threshold: float,
     enable_shap: bool,
     failed_trial_value: float,
+    pairwise_beta: float,
+    min_pairwise_recall: float | None,
 ) -> tuple[dict[str, Any], str]:
     """Build a stable payload that identifies objective-compatible studies."""
     case_names = sorted(
@@ -104,8 +133,10 @@ def _build_case_fold_study_fingerprint(
         "version": CASE_FOLD_STUDY_FINGERPRINT_VERSION,
         "objective_version": CASE_FOLD_OBJECTIVE_VERSION,
         "search_space_version": CASE_FOLD_SEARCH_SPACE_VERSION,
-        "objective": "macro_mean_held_out_case_bcubed_f0_5",
+        "objective": CASE_FOLD_OBJECTIVE_NAME,
         "objective_metric": CASE_FOLD_OBJECTIVE_METRIC,
+        "pairwise_beta": float(pairwise_beta),
+        "min_pairwise_recall": min_pairwise_recall,
         "match_threshold": float(match_threshold),
         "enable_shap": bool(enable_shap),
         "failed_trial_value": float(failed_trial_value),
@@ -470,11 +501,15 @@ def _write_failed_trial_summary(
     params: dict[str, Any],
     rows: list[dict[str, Any]],
     failed_trial_value: float,
+    pairwise_beta: float,
 ) -> float:
     """Persist enough failure context without hiding the whole study."""
     payload = {
         "status": "failed",
         "error": str(error),
+        "objective_metric": CASE_FOLD_OBJECTIVE_METRIC,
+        "objective": CASE_FOLD_OBJECTIVE_NAME,
+        "objective_beta": float(pairwise_beta),
         "params": params,
         "folds_completed": rows,
         "penalty_value": failed_trial_value,
@@ -483,6 +518,8 @@ def _write_failed_trial_summary(
     trial.set_user_attr("case_fold_status", "failed")
     trial.set_user_attr("case_fold_error", str(error))
     trial.set_user_attr("penalty_value", failed_trial_value)
+    trial.set_user_attr("objective_metric", CASE_FOLD_OBJECTIVE_METRIC)
+    trial.set_user_attr("objective_beta", float(pairwise_beta))
     return float(failed_trial_value)
 
 
@@ -625,17 +662,28 @@ def _run_trial_fold(
     return row
 
 
-def _macro_objective(rows: list[dict[str, Any]]) -> float:
-    """Return macro-average B-cubed F0.5 or reject unusable fold metrics."""
+def _macro_objective(
+    rows: list[dict[str, Any]],
+    pairwise_beta: float = DEFAULT_PAIRWISE_BETA,
+) -> float:
+    """Return macro-average pairwise F-beta or reject unusable fold metrics."""
+    _validate_pairwise_beta(pairwise_beta)
     if not rows:
         raise ValueError("case-fold objective requires at least one completed fold")
     values: list[float] = []
     for row in rows:
-        value = row.get(CASE_FOLD_OBJECTIVE_METRIC)
-        if not isinstance(value, (int, float)) or not math.isfinite(float(value)):
+        try:
+            value = pairwise_f_beta_from_metrics(row, beta=float(pairwise_beta))
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError(
+                f"fold {row.get('fold_name', '<unknown>')} has unusable metric"
+            ) from exc
+        if not math.isfinite(value):
             raise ValueError(
                 f"fold {row.get('fold_name', '<unknown>')} has unusable metric"
             )
+        row[CASE_FOLD_OBJECTIVE_METRIC] = value
+        row["pairwise_beta"] = float(pairwise_beta)
         values.append(float(value))
     return sum(values) / len(values)
 
@@ -649,10 +697,12 @@ def case_fold_objective(
     match_threshold: float = DEFAULT_MATCH_THRESHOLD,
     enable_shap: bool = False,
     failed_trial_value: float = DEFAULT_FAILED_TRIAL_VALUE,
+    pairwise_beta: float = DEFAULT_PAIRWISE_BETA,
     fold_runner: FoldRunner = _run_trial_fold,
 ) -> float:
     """Run one Optuna trial and return macro held-out case clustering quality."""
     _validate_failed_trial_value(failed_trial_value)
+    _validate_pairwise_beta(pairwise_beta)
     _validate_case_fold_study_inputs(folds, prepared_by_fold)
     params = suggest_lightgbm_params(trial)
     trial_dir = Path(output_root) / "trials" / f"trial_{trial.number:04d}"
@@ -681,9 +731,10 @@ def case_fold_objective(
                 params=params,
                 rows=rows,
                 failed_trial_value=failed_trial_value,
+                pairwise_beta=pairwise_beta,
             )
     try:
-        objective_value = _macro_objective(rows)
+        objective_value = _macro_objective(rows, pairwise_beta=pairwise_beta)
     except Exception as exc:
         return _write_failed_trial_summary(
             trial,
@@ -692,11 +743,14 @@ def case_fold_objective(
             params=params,
             rows=rows,
             failed_trial_value=failed_trial_value,
+            pairwise_beta=pairwise_beta,
         )
 
     payload = {
         "status": "completed",
         "objective_metric": CASE_FOLD_OBJECTIVE_METRIC,
+        "objective": CASE_FOLD_OBJECTIVE_NAME,
+        "objective_beta": float(pairwise_beta),
         "objective_value": objective_value,
         "params": params,
         "fold_count": len(rows),
@@ -707,6 +761,7 @@ def case_fold_objective(
     trial.set_user_attr("case_fold_status", "completed")
     trial.set_user_attr("fold_metrics", rows)
     trial.set_user_attr("objective_metric", CASE_FOLD_OBJECTIVE_METRIC)
+    trial.set_user_attr("objective_beta", float(pairwise_beta))
     return objective_value
 
 
@@ -720,11 +775,13 @@ def _write_best_params_artifact(
     fold_count: int,
     storage: str | None,
     study_name: str | None,
+    pairwise_beta: float,
 ) -> str:
     """Persist trusted study params in the same shape as scoring metadata expects."""
     payload = {
         "metric": CASE_FOLD_OBJECTIVE_METRIC,
-        "objective": "macro_mean_held_out_case_bcubed_f0_5",
+        "objective": CASE_FOLD_OBJECTIVE_NAME,
+        "objective_beta": float(pairwise_beta),
         "n_trials_completed": n_trials_completed,
         "fold_count": fold_count,
         "best_trial_number": best_trial_number,
@@ -756,18 +813,18 @@ def _trial_params_json(trial: Any) -> str:
     return json.dumps(dict(trial.params), sort_keys=True, separators=(",", ":"))
 
 
-def _trial_passes_bcubed_recall_guardrail(
+def _trial_passes_pairwise_recall_guardrail(
     trial: Any,
-    min_bcubed_recall: float | None,
+    min_pairwise_recall: float | None,
 ) -> bool:
     """Require every held-out fold to clear the recall guardrail when set."""
-    if min_bcubed_recall is None:
+    if min_pairwise_recall is None:
         return True
     fold_metrics = trial.user_attrs.get("fold_metrics", [])
     if not fold_metrics:
         return False
     return all(
-        _metric_clears_minimum(row.get("bcubed_recall"), min_bcubed_recall)
+        _metric_clears_minimum(row.get("pairwise_recall"), min_pairwise_recall)
         for row in fold_metrics
     )
 
@@ -804,12 +861,18 @@ def _trial_csv_rows(study: Any) -> list[dict[str, Any]]:
                     **base_row,
                     "fold_name": "",
                     "held_out_case": "",
-                    "bcubed_f0_5": "",
-                    "bcubed_precision": "",
-                    "bcubed_recall": "",
+                    "pairwise_f_beta": "",
+                    "pairwise_beta": "",
                     "pairwise_precision": "",
                     "pairwise_recall": "",
                     "pairwise_f1": "",
+                    "pairwise_f0_5": "",
+                    "bcubed_f0_5": "",
+                    "bcubed_precision": "",
+                    "bcubed_recall": "",
+                    "bcubed_f1": "",
+                    "ari": "",
+                    "nmi": "",
                     "matching_pairwise_precision": "",
                     "matching_pairwise_recall": "",
                     "matching_pairwise_f1": "",
@@ -823,12 +886,18 @@ def _trial_csv_rows(study: Any) -> list[dict[str, Any]]:
                     **base_row,
                     "fold_name": fold_row.get("fold_name", ""),
                     "held_out_case": fold_row.get("held_out_case", ""),
-                    "bcubed_f0_5": fold_row.get("bcubed_f0_5", ""),
-                    "bcubed_precision": fold_row.get("bcubed_precision", ""),
-                    "bcubed_recall": fold_row.get("bcubed_recall", ""),
+                    "pairwise_f_beta": fold_row.get("pairwise_f_beta", ""),
+                    "pairwise_beta": fold_row.get("pairwise_beta", ""),
                     "pairwise_precision": fold_row.get("pairwise_precision", ""),
                     "pairwise_recall": fold_row.get("pairwise_recall", ""),
                     "pairwise_f1": fold_row.get("pairwise_f1", ""),
+                    "pairwise_f0_5": fold_row.get("pairwise_f0_5", ""),
+                    "bcubed_f0_5": fold_row.get("bcubed_f0_5", ""),
+                    "bcubed_precision": fold_row.get("bcubed_precision", ""),
+                    "bcubed_recall": fold_row.get("bcubed_recall", ""),
+                    "bcubed_f1": fold_row.get("bcubed_f1", ""),
+                    "ari": fold_row.get("ari", ""),
+                    "nmi": fold_row.get("nmi", ""),
                     "matching_pairwise_precision": fold_row.get(
                         "matching_pairwise_precision",
                         "",
@@ -858,12 +927,18 @@ def write_fold_tuning_trials_csv(path: Path | str, study: Any) -> None:
         "objective_metric",
         "fold_name",
         "held_out_case",
-        "bcubed_f0_5",
-        "bcubed_precision",
-        "bcubed_recall",
+        "pairwise_f_beta",
+        "pairwise_beta",
         "pairwise_precision",
         "pairwise_recall",
         "pairwise_f1",
+        "pairwise_f0_5",
+        "bcubed_f0_5",
+        "bcubed_precision",
+        "bcubed_recall",
+        "bcubed_f1",
+        "ari",
+        "nmi",
         "matching_pairwise_precision",
         "matching_pairwise_recall",
         "matching_pairwise_f1",
@@ -896,7 +971,7 @@ def write_fold_tuning_report_markdown(
     *,
     summary: dict[str, Any],
     best_trial: Any | None,
-    min_bcubed_recall: float | None,
+    min_pairwise_recall: float | None,
 ) -> None:
     """Write a compact Markdown report for reviewing tuning tradeoffs."""
     path = Path(path)
@@ -905,8 +980,8 @@ def write_fold_tuning_report_markdown(
     best_trial_number = int(best_trial.number) if best_trial is not None else "None"
     best_params = dict(best_trial.params) if best_trial is not None else {}
     guardrail_text = (
-        f"B-cubed recall >= {_format_markdown_metric(min_bcubed_recall)} per fold"
-        if min_bcubed_recall is not None
+        f"Pairwise recall >= {_format_markdown_metric(min_pairwise_recall)} per fold"
+        if min_pairwise_recall is not None
         else "Not set"
     )
     lines = [
@@ -932,6 +1007,7 @@ def write_fold_tuning_report_markdown(
                 ["Best trial", best_trial_number],
                 ["Best value", _format_markdown_metric(summary["best_value"])],
                 ["Objective metric", summary["objective_metric"]],
+                ["Objective beta", _format_markdown_metric(summary["objective_beta"])],
                 ["Recall guardrail", guardrail_text],
             ],
         ),
@@ -949,12 +1025,17 @@ def write_fold_tuning_report_markdown(
                 [
                     "Fold",
                     "Held-out case",
-                    "B-cubed F0.5",
-                    "B-cubed P",
-                    "B-cubed R",
+                    "Pairwise F-beta",
+                    "Pairwise beta",
                     "Pairwise P",
                     "Pairwise R",
                     "Pairwise F1",
+                    "Pairwise F0.5",
+                    "B-cubed F0.5",
+                    "B-cubed P",
+                    "B-cubed R",
+                    "ARI",
+                    "NMI",
                     "Matching P",
                     "Matching R",
                     "Matching F1",
@@ -963,12 +1044,17 @@ def write_fold_tuning_report_markdown(
                     [
                         row.get("fold_name", ""),
                         row.get("held_out_case", ""),
-                        _format_markdown_metric(row.get("bcubed_f0_5", "")),
-                        _format_markdown_metric(row.get("bcubed_precision", "")),
-                        _format_markdown_metric(row.get("bcubed_recall", "")),
+                        _format_markdown_metric(row.get("pairwise_f_beta", "")),
+                        _format_markdown_metric(row.get("pairwise_beta", "")),
                         _format_markdown_metric(row.get("pairwise_precision", "")),
                         _format_markdown_metric(row.get("pairwise_recall", "")),
                         _format_markdown_metric(row.get("pairwise_f1", "")),
+                        _format_markdown_metric(row.get("pairwise_f0_5", "")),
+                        _format_markdown_metric(row.get("bcubed_f0_5", "")),
+                        _format_markdown_metric(row.get("bcubed_precision", "")),
+                        _format_markdown_metric(row.get("bcubed_recall", "")),
+                        _format_markdown_metric(row.get("ari", "")),
+                        _format_markdown_metric(row.get("nmi", "")),
                         _format_markdown_metric(
                             row.get("matching_pairwise_precision", "")
                         ),
@@ -998,7 +1084,8 @@ def run_case_fold_optuna_study(
     enable_shap: bool = False,
     storage: str | None = None,
     study_name: str | None = None,
-    min_bcubed_recall: float | None = None,
+    pairwise_beta: float = DEFAULT_PAIRWISE_BETA,
+    min_pairwise_recall: float | None = None,
     failed_trial_value: float = DEFAULT_FAILED_TRIAL_VALUE,
     prepared_by_fold: dict[str, dict[str, PreparedCaseRun]] | None = None,
     fold_runner: FoldRunner = _run_trial_fold,
@@ -1008,8 +1095,8 @@ def run_case_fold_optuna_study(
         raise ValueError("n_trials must be >= 1")
     if mode not in VALID_TUNING_MODES:
         raise ValueError(f"mode must be one of {sorted(VALID_TUNING_MODES)}")
-    if min_bcubed_recall is not None and not 0.0 <= min_bcubed_recall <= 1.0:
-        raise ValueError("min_bcubed_recall must be between 0.0 and 1.0")
+    _validate_pairwise_beta(pairwise_beta)
+    _validate_min_pairwise_recall(min_pairwise_recall)
     _validate_failed_trial_value(failed_trial_value)
 
     try:
@@ -1031,6 +1118,8 @@ def run_case_fold_optuna_study(
         match_threshold=match_threshold,
         enable_shap=enable_shap,
         failed_trial_value=failed_trial_value,
+        pairwise_beta=pairwise_beta,
+        min_pairwise_recall=min_pairwise_recall,
     )
 
     sampler = optuna.samplers.TPESampler(seed=DEFAULT_LIGHTGBM_SEED)
@@ -1051,6 +1140,7 @@ def run_case_fold_optuna_study(
             match_threshold=match_threshold,
             enable_shap=enable_shap,
             failed_trial_value=failed_trial_value,
+            pairwise_beta=pairwise_beta,
             fold_runner=fold_runner,
         ),
         n_trials=n_trials,
@@ -1070,7 +1160,7 @@ def run_case_fold_optuna_study(
     trusted_trials = [
         trial
         for trial in objective_completed_trials
-        if _trial_passes_bcubed_recall_guardrail(trial, min_bcubed_recall)
+        if _trial_passes_pairwise_recall_guardrail(trial, min_pairwise_recall)
     ]
     best_trial = (
         max(trusted_trials, key=lambda trial: float(trial.value))
@@ -1090,6 +1180,7 @@ def run_case_fold_optuna_study(
             fold_count=len(folds),
             storage=storage,
             study_name=study_name,
+            pairwise_beta=pairwise_beta,
         )
         stale_artifact_removed = False
     else:
@@ -1113,6 +1204,7 @@ def run_case_fold_optuna_study(
     summary.update(
         {
             "objective_metric": CASE_FOLD_OBJECTIVE_METRIC,
+            "objective_beta": float(pairwise_beta),
             "tuning_scope": "case_fold",
             "fold_count": len(folds),
             "study_name": study.study_name,
@@ -1122,7 +1214,8 @@ def run_case_fold_optuna_study(
             "trusted_trial_count": len(trusted_trials),
             "successful_trial_count": len(trusted_trials),
             "best_params": best_params,
-            "min_bcubed_recall": min_bcubed_recall,
+            "pairwise_beta": float(pairwise_beta),
+            "min_pairwise_recall": min_pairwise_recall,
             "stale_best_params_artifact_removed": stale_artifact_removed,
             "case_fold_fingerprint_hash": fingerprint_hash,
             "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -1133,7 +1226,7 @@ def run_case_fold_optuna_study(
         output_root / FOLD_TUNING_REPORT_FILENAME,
         summary=summary,
         best_trial=best_trial,
-        min_bcubed_recall=min_bcubed_recall,
+        min_pairwise_recall=min_pairwise_recall,
     )
     write_fold_summary_json(output_root / CASE_FOLD_STUDY_SUMMARY_FILENAME, summary)
     return summary

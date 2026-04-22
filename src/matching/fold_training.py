@@ -31,6 +31,7 @@ FINAL_CLUSTERING_METRIC_FIELDS = (
     "pairwise_precision",
     "pairwise_recall",
     "pairwise_f1",
+    "pairwise_f0_5",
     "ari",
     "nmi",
     "bcubed_precision",
@@ -42,6 +43,7 @@ FINAL_CLUSTERING_METRIC_LABELS = {
     "pairwise_precision": "Pairwise precision",
     "pairwise_recall": "Pairwise recall",
     "pairwise_f1": "Pairwise F1",
+    "pairwise_f0_5": "Pairwise F0.5",
     "ari": "ARI",
     "nmi": "NMI",
     "bcubed_precision": "B-cubed precision",
@@ -71,11 +73,7 @@ class FoldTrainingMatrix:
 
 def _raise_if_duplicate_pair_keys(frame: pl.DataFrame, source_name: str) -> None:
     """Reject duplicate pair keys before joining labels onto features."""
-    duplicate_keys = (
-        frame.group_by(PAIR_KEY_COLUMNS)
-        .len()
-        .filter(pl.col("len") > 1)
-    )
+    duplicate_keys = frame.group_by(PAIR_KEY_COLUMNS).len().filter(pl.col("len") > 1)
     if duplicate_keys.height:
         raise ValueError(f"{source_name} contains duplicate pair keys")
 
@@ -235,10 +233,13 @@ def build_fold_summary_row(
         "train_labeled_row_count": int(training_metadata["labeled_row_count"]),
         "train_positive_rate": float(training_metadata["positive_rate"]),
         "evaluation_entity_count": int(metric_scope["evaluation_entity_count"]),
-        "evaluation_candidate_pair_count": int(metric_scope["evaluation_candidate_pair_count"]),
+        "evaluation_candidate_pair_count": int(
+            metric_scope["evaluation_candidate_pair_count"]
+        ),
         "pairwise_precision": float(metrics["pairwise_precision"]),
         "pairwise_recall": float(metrics["pairwise_recall"]),
         "pairwise_f1": float(metrics["pairwise_f1"]),
+        "pairwise_f0_5": float(metrics["pairwise_f0_5"]),
         "ari": float(metrics["ari"]),
         "nmi": float(metrics["nmi"]),
         "bcubed_precision": float(metrics["bcubed_precision"]),
@@ -329,7 +330,10 @@ def write_fold_summary_markdown(path: Path | str, payload: dict[str, Any]) -> No
         _markdown_table(
             ["Metric", "Value"],
             [
-                [FINAL_CLUSTERING_METRIC_LABELS[name], _format_markdown_metric(summary_row[name])]
+                [
+                    FINAL_CLUSTERING_METRIC_LABELS[name],
+                    _format_markdown_metric(summary_row[name]),
+                ]
                 for name in FINAL_CLUSTERING_METRIC_FIELDS
             ],
         ),
@@ -341,7 +345,9 @@ def write_fold_summary_markdown(path: Path | str, payload: dict[str, Any]) -> No
             [
                 [
                     "Blocking gold-positive-pair recall",
-                    _format_markdown_metric(summary_row["blocking_positive_pair_recall"]),
+                    _format_markdown_metric(
+                        summary_row["blocking_positive_pair_recall"]
+                    ),
                 ],
                 [
                     "Matching pairwise precision",
@@ -405,6 +411,7 @@ def write_aggregate_fold_reports_markdown(
                 "Pairwise P",
                 "Pairwise R",
                 "Pairwise F1",
+                "Pairwise F0.5",
                 "ARI",
                 "NMI",
                 "B-cubed P",
@@ -423,6 +430,7 @@ def write_aggregate_fold_reports_markdown(
                     _format_markdown_metric(row["pairwise_precision"]),
                     _format_markdown_metric(row["pairwise_recall"]),
                     _format_markdown_metric(row["pairwise_f1"]),
+                    _format_markdown_metric(row["pairwise_f0_5"]),
                     _format_markdown_metric(row["ari"]),
                     _format_markdown_metric(row["nmi"]),
                     _format_markdown_metric(row["bcubed_precision"]),
@@ -443,6 +451,7 @@ def write_aggregate_fold_reports_markdown(
                     _format_markdown_metric(macro_row["pairwise_precision"]),
                     _format_markdown_metric(macro_row["pairwise_recall"]),
                     _format_markdown_metric(macro_row["pairwise_f1"]),
+                    _format_markdown_metric(macro_row["pairwise_f0_5"]),
                     _format_markdown_metric(macro_row["ari"]),
                     _format_markdown_metric(macro_row["nmi"]),
                     _format_markdown_metric(macro_row["bcubed_precision"]),

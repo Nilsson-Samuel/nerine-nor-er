@@ -26,7 +26,7 @@ from scripts.run_case_fold_eval import (
 )
 from src.evaluation.run import DEFAULT_MATCH_THRESHOLD
 from src.matching.fold_preparation import CaseFoldTuningCase, CaseFoldTuningFold
-from src.matching.fold_tuning import run_case_fold_optuna_study
+from src.matching.fold_tuning import DEFAULT_PAIRWISE_BETA, run_case_fold_optuna_study
 from src.matching.tuning import DEFAULT_SMOKE_TRIALS, VALID_TUNING_MODES
 
 DEFAULT_STUDY_NAME = "case_fold_lightgbm"
@@ -75,10 +75,16 @@ def parse_args() -> argparse.Namespace:
         help="Score threshold used when evaluating held-out resolved clusters.",
     )
     parser.add_argument(
-        "--min-bcubed-recall",
+        "--pairwise-beta",
+        type=float,
+        default=DEFAULT_PAIRWISE_BETA,
+        help="F-beta value for the pairwise tuning objective.",
+    )
+    parser.add_argument(
+        "--min-pairwise-recall",
         type=float,
         default=None,
-        help="Optional per-fold recall guardrail for trusted best params.",
+        help="Optional per-fold pairwise recall guardrail for trusted best params.",
     )
     parser.add_argument(
         "--storage",
@@ -166,7 +172,8 @@ def main() -> int:
         n_trials=args.n_trials,
         mode=args.mode,
         match_threshold=args.match_threshold,
-        min_bcubed_recall=args.min_bcubed_recall,
+        pairwise_beta=args.pairwise_beta,
+        min_pairwise_recall=args.min_pairwise_recall,
         storage=args.storage,
         study_name=args.study_name,
     )

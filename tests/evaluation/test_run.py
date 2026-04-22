@@ -850,6 +850,7 @@ def test_run_evaluation_writes_report_and_labels(tmp_path: Path) -> None:
     assert persisted["stage_metrics"]["matching"]["f1"] == 0.8
     assert persisted["stage_metrics"]["matching"]["evaluated_candidate_pair_count"] == 6
     assert persisted["metrics"]["pairwise_f1"] == 0.4
+    assert persisted["metrics"]["pairwise_f0_5"] > 0.0
     assert persisted["metrics"]["bcubed_f1"] > 0.0
     assert persisted["metrics"]["bcubed_f0_5"] > 0.0
     assert persisted["regression_checks"]["passed"] is True
@@ -858,6 +859,7 @@ def test_run_evaluation_writes_report_and_labels(tmp_path: Path) -> None:
     assert report["metrics"]["pairwise_f1"] == 0.4
     assert "## Final Clustering / Resolution Metrics" in markdown_report
     assert "Pairwise precision" in markdown_report
+    assert "Pairwise F0.5" in markdown_report
     assert "B-cubed F0.5" in markdown_report
     assert "## Regression Checks" in markdown_report
 
@@ -879,7 +881,9 @@ def test_run_evaluation_filters_shared_training_labels_by_allowed_doc_ids(
         shared_labels_allowed_doc_ids=[_hex32(1)],
     )
 
-    full_labels = pq.read_table(get_evaluation_labels_path(data_dir, run_id)).to_pylist()
+    full_labels = pq.read_table(
+        get_evaluation_labels_path(data_dir, run_id)
+    ).to_pylist()
     shared_labels = pq.read_table(shared_labels_path).to_pylist()
 
     assert len(full_labels) == 6
@@ -964,7 +968,8 @@ def test_run_evaluation_excludes_unresolved_gold_mentions_from_scoring(
         patched = pl.concat([forced, remapped.slice(1)], how="vertical")
         return patched, {
             **summary,
-            "gold_mentions_already_aligned": summary["gold_mentions_already_aligned"] - 1,
+            "gold_mentions_already_aligned": summary["gold_mentions_already_aligned"]
+            - 1,
             "gold_mentions_unresolved": summary["gold_mentions_unresolved"] + 1,
         }
 
@@ -1012,6 +1017,7 @@ def test_run_evaluation_scores_only_confidently_bridged_subset(
     assert report["stage_metrics"]["matching"]["precision"] == pytest.approx(1.0)
     assert report["stage_metrics"]["matching"]["recall"] == pytest.approx(1.0)
     assert report["metrics"]["pairwise_f1"] == pytest.approx(1.0)
+    assert report["metrics"]["pairwise_f0_5"] == pytest.approx(1.0)
     assert report["metrics"]["bcubed_f1"] == pytest.approx(1.0)
     assert report["metrics"]["bcubed_f0_5"] == pytest.approx(1.0)
 
@@ -1033,14 +1039,14 @@ def test_run_evaluation_empty_confident_subset_reports_zero_metrics_and_fails_ch
     assert report["metric_scope"]["evaluation_entity_count"] == 0
     assert report["metric_scope"]["evaluation_candidate_pair_count"] == 0
     assert report["metrics"]["pairwise_f1"] == pytest.approx(0.0)
+    assert report["metrics"]["pairwise_f0_5"] == pytest.approx(0.0)
     assert report["metrics"]["bcubed_f1"] == pytest.approx(0.0)
     assert report["metrics"]["bcubed_f0_5"] == pytest.approx(0.0)
     assert report["metrics"]["ari"] == pytest.approx(0.0)
     assert report["metrics"]["nmi"] == pytest.approx(0.0)
     assert report["regression_checks"]["passed"] is False
     assert any(
-        check["check"] == "evaluation_entity_count_nonzero"
-        and check["passed"] is False
+        check["check"] == "evaluation_entity_count_nonzero" and check["passed"] is False
         for check in report["regression_checks"]["checks"]
     )
     assert any(
@@ -1129,6 +1135,7 @@ def test_build_regression_checks_flags_metric_drift(tmp_path: Path) -> None:
             {
                 "metrics": {
                     "pairwise_f1": 0.8,
+                    "pairwise_f0_5": 0.8,
                     "bcubed_f1": 0.8,
                     "bcubed_f0_5": 0.8,
                     "ari": 0.8,
@@ -1144,6 +1151,7 @@ def test_build_regression_checks_flags_metric_drift(tmp_path: Path) -> None:
     checks = build_regression_checks(
         metrics={
             "pairwise_f1": 0.4,
+            "pairwise_f0_5": 0.4,
             "bcubed_f1": 0.5,
             "bcubed_f0_5": 0.5,
             "ari": 0.5,
@@ -1172,6 +1180,7 @@ def test_build_regression_checks_skips_missing_baseline_metrics(tmp_path: Path) 
     checks = build_regression_checks(
         metrics={
             "pairwise_f1": 0.8,
+            "pairwise_f0_5": 0.8,
             "bcubed_f1": 0.8,
             "bcubed_f0_5": 0.8,
             "ari": 0.8,
@@ -1201,6 +1210,7 @@ def test_build_regression_checks_fails_empty_metric_scope(tmp_path: Path) -> Non
     checks = build_regression_checks(
         metrics={
             "pairwise_f1": 0.0,
+            "pairwise_f0_5": 0.0,
             "bcubed_f1": 0.0,
             "bcubed_f0_5": 0.0,
             "ari": 0.0,
@@ -1215,8 +1225,7 @@ def test_build_regression_checks_fails_empty_metric_scope(tmp_path: Path) -> Non
 
     assert checks["passed"] is False
     assert any(
-        check["check"] == "evaluation_entity_count_nonzero"
-        and check["passed"] is False
+        check["check"] == "evaluation_entity_count_nonzero" and check["passed"] is False
         for check in checks["checks"]
     )
     assert any(

@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-import math
 from collections import defaultdict
 from itertools import combinations
-from typing import Iterable, Mapping
+import math
+from typing import Any, Iterable, Mapping
 
 from sklearn.metrics import adjusted_rand_score, normalized_mutual_info_score
-
 
 MetricDict = dict[str, float | int]
 PairKey = tuple[str, str]
@@ -55,7 +54,9 @@ def pairwise_metrics(
     }
 
 
-def positive_pairs_from_memberships(membership_by_entity: Mapping[str, str]) -> set[PairKey]:
+def positive_pairs_from_memberships(
+    membership_by_entity: Mapping[str, str],
+) -> set[PairKey]:
     """Expand cluster memberships into canonical positive pair keys."""
     members_by_group: dict[str, list[str]] = defaultdict(list)
     for entity_id, group_id in membership_by_entity.items():
@@ -82,6 +83,7 @@ def clustering_metrics(
             "pairwise_precision": 0.0,
             "pairwise_recall": 0.0,
             "pairwise_f1": 0.0,
+            "pairwise_f0_5": 0.0,
             "ari": 0.0,
             "nmi": 0.0,
             "bcubed_precision": 0.0,
@@ -89,7 +91,9 @@ def clustering_metrics(
             "bcubed_f1": 0.0,
             "bcubed_f0_5": 0.0,
         }
-    gold_labels = [str(gold_membership_by_entity[entity_id]) for entity_id in entity_ids]
+    gold_labels = [
+        str(gold_membership_by_entity[entity_id]) for entity_id in entity_ids
+    ]
     predicted_labels = [
         str(predicted_membership_by_entity[entity_id]) for entity_id in entity_ids
     ]
@@ -103,6 +107,7 @@ def clustering_metrics(
         "pairwise_precision": pairwise["precision"],
         "pairwise_recall": pairwise["recall"],
         "pairwise_f1": pairwise["f1"],
+        "pairwise_f0_5": _fbeta(pairwise["precision"], pairwise["recall"], beta=0.5),
         "ari": float(adjusted_rand_score(gold_labels, predicted_labels)),
         "nmi": float(normalized_mutual_info_score(gold_labels, predicted_labels)),
         "bcubed_precision": bcubed["precision"],
@@ -110,6 +115,15 @@ def clustering_metrics(
         "bcubed_f1": bcubed["f1"],
         "bcubed_f0_5": bcubed["f0_5"],
     }
+
+
+def pairwise_f_beta_from_metrics(metrics: Mapping[str, Any], beta: float) -> float:
+    """Compute pairwise F-beta from a metric row with pairwise precision/recall."""
+    return _fbeta(
+        float(metrics["pairwise_precision"]),
+        float(metrics["pairwise_recall"]),
+        beta=beta,
+    )
 
 
 def bcubed_metrics(
@@ -128,7 +142,9 @@ def bcubed_metrics(
     recall_total = 0.0
     for entity_id in entity_ids:
         gold_cluster = gold_members[str(gold_membership_by_entity[entity_id])]
-        predicted_cluster = predicted_members[str(predicted_membership_by_entity[entity_id])]
+        predicted_cluster = predicted_members[
+            str(predicted_membership_by_entity[entity_id])
+        ]
         intersection_size = len(gold_cluster & predicted_cluster)
         precision_total += intersection_size / len(predicted_cluster)
         recall_total += intersection_size / len(gold_cluster)
@@ -156,7 +172,11 @@ def _normalize_pair(pair: PairKey) -> PairKey:
     entity_id_a, entity_id_b = pair
     if entity_id_a == entity_id_b:
         raise ValueError("pairwise metrics do not support self-pairs")
-    return (entity_id_a, entity_id_b) if entity_id_a < entity_id_b else (entity_id_b, entity_id_a)
+    return (
+        (entity_id_a, entity_id_b)
+        if entity_id_a < entity_id_b
+        else (entity_id_b, entity_id_a)
+    )
 
 
 def _require_matching_entity_sets(

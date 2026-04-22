@@ -27,6 +27,7 @@ from src.matching.fold_tuning import (
     CASE_FOLD_FINGERPRINT_ATTR,
     CASE_FOLD_FINGERPRINT_HASH_ATTR,
     CASE_FOLD_OBJECTIVE_METRIC,
+    DEFAULT_PAIRWISE_BETA,
     DEFAULT_FAILED_TRIAL_VALUE,
     FOLD_TUNING_REPORT_FILENAME,
     FOLD_TUNING_SUMMARY_FILENAME,
@@ -36,8 +37,10 @@ from src.matching.fold_tuning import (
     PreparedCaseRun,
     case_fold_objective,
     run_case_fold_optuna_study,
+    _macro_objective,
     _materialize_trial_case_run,
     _run_trial_fold,
+    _trial_passes_pairwise_recall_guardrail,
 )
 from src.matching.writer import get_features_output_path, get_scored_pairs_output_path
 from src.resolution import run as resolution_run
@@ -81,19 +84,20 @@ class DummyTrial:
         self.user_attrs[name] = value
 
 
-def _fold_row(fold_name: str, bcubed_f0_5: float) -> dict[str, Any]:
+def _fold_row(fold_name: str, pairwise_score: float) -> dict[str, Any]:
     """Build the complete metric surface expected by macro fold summaries."""
     return {
         "fold_name": fold_name,
-        "pairwise_precision": 0.5,
-        "pairwise_recall": 0.5,
-        "pairwise_f1": 0.5,
+        "pairwise_precision": pairwise_score,
+        "pairwise_recall": pairwise_score,
+        "pairwise_f1": pairwise_score,
+        "pairwise_f0_5": pairwise_score,
         "ari": 0.5,
         "nmi": 0.5,
         "bcubed_precision": 0.5,
         "bcubed_recall": 0.5,
         "bcubed_f1": 0.5,
-        CASE_FOLD_OBJECTIVE_METRIC: bcubed_f0_5,
+        "bcubed_f0_5": 0.5,
     }
 
 
@@ -326,12 +330,13 @@ def _fake_evaluation_report() -> dict[str, Any]:
             "pairwise_precision": 0.7,
             "pairwise_recall": 0.6,
             "pairwise_f1": 0.64,
+            "pairwise_f0_5": 0.68,
             "ari": 0.5,
             "nmi": 0.55,
             "bcubed_precision": 0.8,
             "bcubed_recall": 0.65,
             "bcubed_f1": 0.72,
-            CASE_FOLD_OBJECTIVE_METRIC: 0.76,
+            "bcubed_f0_5": 0.76,
         },
         "metric_scope": {
             "evaluation_entity_count": 4,
@@ -664,7 +669,7 @@ def test_run_trial_fold_uses_trial_local_case_run_for_write_stages(
     ]
     assert all(call[1] != prepared_run.data_dir for call in calls)
     assert row["fold_name"] == "fold_a"
-    assert row[CASE_FOLD_OBJECTIVE_METRIC] == 0.76
+    assert row["pairwise_f0_5"] == 0.68
 
 
 def test_repeated_trial_folds_keep_outputs_out_of_prepared_case_run(
@@ -784,6 +789,7 @@ def test_case_fold_objective_macro_averages_fake_fold_results(tmp_path: Path) ->
     assert value == 0.6000000000000001
     assert summary["status"] == "completed"
     assert summary["objective_metric"] == CASE_FOLD_OBJECTIVE_METRIC
+    assert summary["objective_beta"] == DEFAULT_PAIRWISE_BETA
     assert summary["fold_count"] == 2
     assert trial.user_attrs["case_fold_status"] == "completed"
 
@@ -811,6 +817,8 @@ def test_case_fold_objective_penalizes_failed_fold(tmp_path: Path) -> None:
 
     assert value == -0.25
     assert summary["status"] == "failed"
+    assert summary["objective_metric"] == CASE_FOLD_OBJECTIVE_METRIC
+    assert summary["objective_beta"] == DEFAULT_PAIRWISE_BETA
     assert summary["penalty_value"] == -0.25
     assert "usable metrics" in summary["error"]
     assert trial.user_attrs["case_fold_status"] == "failed"
@@ -818,6 +826,35 @@ def test_case_fold_objective_penalizes_failed_fold(tmp_path: Path) -> None:
 
 def test_default_failed_trial_value_is_out_of_metric_range() -> None:
     assert DEFAULT_FAILED_TRIAL_VALUE == -1.0
+
+
+def test_macro_objective_uses_pairwise_precision_recall_and_default_beta() -> None:
+    row = _fold_row("fold_a", 0.9)
+    row.update(
+        {
+            "pairwise_precision": 0.8,
+            "pairwise_recall": 0.2,
+            "bcubed_f0_5": 0.99,
+        }
+    )
+
+    value = _macro_objective([row])
+
+    assert DEFAULT_PAIRWISE_BETA == 0.5
+    assert value == pytest.approx(0.5)
+    assert row[CASE_FOLD_OBJECTIVE_METRIC] == pytest.approx(0.5)
+    assert row["pairwise_beta"] == DEFAULT_PAIRWISE_BETA
+
+
+def test_macro_objective_supports_non_default_pairwise_beta() -> None:
+    row = _fold_row("fold_a", 0.9)
+    row.update({"pairwise_precision": 0.8, "pairwise_recall": 0.2})
+
+    value = _macro_objective([row], pairwise_beta=1.0)
+
+    assert value == pytest.approx(0.32)
+    assert row[CASE_FOLD_OBJECTIVE_METRIC] == pytest.approx(0.32)
+    assert row["pairwise_beta"] == 1.0
 
 
 def test_case_fold_objective_rejects_non_negative_failed_trial_value(
@@ -848,6 +885,24 @@ def test_case_fold_objective_rejects_missing_prepared_case_before_penalty(
         )
 
     assert not (tmp_path / "trials" / "trial_0003" / "trial_summary.json").exists()
+
+
+@pytest.mark.parametrize("pairwise_beta", [0.0, -0.1, float("nan"), float("inf")])
+def test_case_fold_study_rejects_invalid_pairwise_beta(
+    tmp_path: Path,
+    pairwise_beta: float,
+) -> None:
+    folds = [CaseFoldTuningFold("fold_a", "case_a", ["case_b"])]
+
+    with pytest.raises(ValueError, match="pairwise_beta"):
+        run_case_fold_optuna_study(
+            cases={},
+            folds=folds,
+            output_root=tmp_path,
+            n_trials=1,
+            pairwise_beta=pairwise_beta,
+            prepared_by_fold=_prepared_by_fold_stub(tmp_path, folds),
+        )
 
 
 def test_case_fold_study_rejects_missing_prepared_fold(tmp_path: Path) -> None:
@@ -1172,8 +1227,10 @@ def test_case_fold_study_writes_best_params_and_uses_persistent_storage(
     assert summary["best_params_artifact_written"] is True
     assert summary["best_params_artifact"] == CASE_FOLD_BEST_PARAMS_FILENAME
     assert summary["objective_metric"] == CASE_FOLD_OBJECTIVE_METRIC
+    assert summary["objective_beta"] == DEFAULT_PAIRWISE_BETA
     assert artifact["metric"] == CASE_FOLD_OBJECTIVE_METRIC
-    assert artifact["objective"] == "macro_mean_held_out_case_bcubed_f0_5"
+    assert artifact["objective"] == "macro_mean_held_out_case_pairwise_f_beta"
+    assert artifact["objective_beta"] == DEFAULT_PAIRWISE_BETA
     assert artifact["fold_count"] == 2
     assert artifact["n_trials_completed"] == 2
     assert set(artifact["best_params"]) == {
@@ -1232,17 +1289,21 @@ def test_case_fold_study_writes_readable_tuning_reports(tmp_path: Path) -> None:
         trial_rows = list(csv.DictReader(handle))
     report = (tmp_path / FOLD_TUNING_REPORT_FILENAME).read_text(encoding="utf-8")
 
-    assert summary["best_value"] == 0.65
+    assert summary["best_value"] == pytest.approx(0.65)
     assert summary_payload["best_params"]
     assert summary_payload["n_trials_completed"] == 2
     assert len(trial_rows) == 4
     assert trial_rows[0]["fold_name"] == "fold_a"
-    assert trial_rows[0]["bcubed_f0_5"] == "0.45"
+    assert float(trial_rows[0]["pairwise_f_beta"]) == pytest.approx(0.45)
+    assert trial_rows[0]["pairwise_beta"] == "0.5"
+    assert float(trial_rows[0]["pairwise_f0_5"]) == pytest.approx(0.45)
     assert "Best Params" in report
     assert "Optuna completed trial count" in report
     assert "Objective-completed trial count" in report
     assert "Trusted trial count" in report
     assert "Best params artifact written" in report
+    assert "Pairwise F-beta" in report
+    assert "Pairwise beta" in report
     assert "B-cubed R" in report
     assert "Pairwise P" in report
 
@@ -1262,7 +1323,7 @@ def test_case_fold_study_recall_guardrail_withholds_best_params(
         _trial_number: int,
     ) -> dict[str, Any]:
         row = _fold_row(fold.name, 0.7)
-        row["bcubed_recall"] = 0.4
+        row["pairwise_recall"] = 0.4
         return row
 
     summary = run_case_fold_optuna_study(
@@ -1270,7 +1331,7 @@ def test_case_fold_study_recall_guardrail_withholds_best_params(
         folds=folds,
         output_root=tmp_path,
         n_trials=1,
-        min_bcubed_recall=0.8,
+        min_pairwise_recall=0.8,
         prepared_by_fold=_prepared_by_fold_stub(tmp_path, folds),
         fold_runner=low_recall_runner,
     )
@@ -1282,6 +1343,39 @@ def test_case_fold_study_recall_guardrail_withholds_best_params(
     assert summary["successful_trial_count"] == 0
     assert not (tmp_path / CASE_FOLD_BEST_PARAMS_FILENAME).exists()
     assert (tmp_path / FOLD_TUNING_TRIALS_FILENAME).exists()
+
+
+def test_case_fold_study_pairwise_recall_guardrail_accepts_all_passing_folds(
+    tmp_path: Path,
+) -> None:
+    folds = [CaseFoldTuningFold("fold_a", "case_a", ["case_b"])]
+
+    def passing_recall_runner(
+        fold: CaseFoldTuningFold,
+        _prepared_runs: dict,
+        _trial_fold_dir: Path,
+        _params: dict,
+        _match_threshold: float,
+        _enable_shap: bool,
+        _trial_number: int,
+    ) -> dict[str, Any]:
+        row = _fold_row(fold.name, 0.7)
+        row["pairwise_recall"] = 0.8
+        return row
+
+    summary = run_case_fold_optuna_study(
+        cases={},
+        folds=folds,
+        output_root=tmp_path,
+        n_trials=1,
+        min_pairwise_recall=0.8,
+        prepared_by_fold=_prepared_by_fold_stub(tmp_path, folds),
+        fold_runner=passing_recall_runner,
+    )
+
+    assert summary["best_params_found"] is True
+    assert summary["trusted_trial_count"] == 1
+    assert (tmp_path / CASE_FOLD_BEST_PARAMS_FILENAME).exists()
 
 
 def test_case_fold_study_removes_stale_best_params_when_guardrail_rejects_all(
@@ -1300,7 +1394,7 @@ def test_case_fold_study_removes_stale_best_params_when_guardrail_rejects_all(
         _trial_number: int,
     ) -> dict[str, Any]:
         row = _fold_row(fold.name, 0.7)
-        row["bcubed_recall"] = 0.9
+        row["pairwise_recall"] = 0.9
         return row
 
     first_summary = run_case_fold_optuna_study(
@@ -1324,7 +1418,7 @@ def test_case_fold_study_removes_stale_best_params_when_guardrail_rejects_all(
         _trial_number: int,
     ) -> dict[str, Any]:
         row = _fold_row(fold.name, 0.8)
-        row["bcubed_recall"] = 0.2
+        row["pairwise_recall"] = 0.2
         return row
 
     second_summary = run_case_fold_optuna_study(
@@ -1332,7 +1426,7 @@ def test_case_fold_study_removes_stale_best_params_when_guardrail_rejects_all(
         folds=folds,
         output_root=tmp_path,
         n_trials=1,
-        min_bcubed_recall=0.8,
+        min_pairwise_recall=0.8,
         prepared_by_fold=prepared,
         fold_runner=low_recall_runner,
     )
@@ -1344,47 +1438,18 @@ def test_case_fold_study_removes_stale_best_params_when_guardrail_rejects_all(
     assert not (tmp_path / CASE_FOLD_BEST_PARAMS_FILENAME).exists()
 
 
-@pytest.mark.parametrize(
-    "recall_value",
-    [None, "not-a-number", "nan", "inf", "-inf"],
-)
-def test_case_fold_study_guardrail_treats_malformed_recall_as_failure(
-    tmp_path: Path,
+@pytest.mark.parametrize("recall_value", [None, "not-a-number", "nan", "inf", "-inf"])
+def test_pairwise_guardrail_treats_malformed_recall_as_failure(
     recall_value: Any,
 ) -> None:
-    folds = [CaseFoldTuningFold("fold_a", "case_a", ["case_b"])]
+    row = _fold_row("fold_a", 0.7)
+    if recall_value is None:
+        del row["pairwise_recall"]
+    else:
+        row["pairwise_recall"] = recall_value
+    trial = type("TrialWithMetrics", (), {"user_attrs": {"fold_metrics": [row]}})()
 
-    def malformed_recall_runner(
-        fold: CaseFoldTuningFold,
-        _prepared_runs: dict,
-        _trial_fold_dir: Path,
-        _params: dict,
-        _match_threshold: float,
-        _enable_shap: bool,
-        _trial_number: int,
-    ) -> dict[str, Any]:
-        row = _fold_row(fold.name, 0.7)
-        if recall_value is None:
-            del row["bcubed_recall"]
-        else:
-            row["bcubed_recall"] = recall_value
-        return row
-
-    summary = run_case_fold_optuna_study(
-        cases={},
-        folds=folds,
-        output_root=tmp_path,
-        n_trials=1,
-        min_bcubed_recall=0.8,
-        prepared_by_fold=_prepared_by_fold_stub(tmp_path, folds),
-        fold_runner=malformed_recall_runner,
-    )
-
-    assert summary["status"] == "completed_no_trusted_best_params"
-    assert summary["objective_completed_trial_count"] == 1
-    assert summary["trusted_trial_count"] == 0
-    assert summary["best_params_artifact_written"] is False
-    assert (tmp_path / FOLD_TUNING_REPORT_FILENAME).exists()
+    assert _trial_passes_pairwise_recall_guardrail(trial, 0.8) is False
 
 
 def test_case_fold_tuning_default_output_root_is_timestamped_and_fresh(
@@ -1415,6 +1480,8 @@ def test_case_fold_tuning_runner_help_bootstraps_repo_root() -> None:
 
     assert result.returncode == 0
     assert "Run case-held-out Optuna tuning" in result.stdout
+    assert "--pairwise-beta" in result.stdout
+    assert "--min-pairwise-recall" in result.stdout
     assert "--storage" in result.stdout
 
 
@@ -1580,6 +1647,59 @@ def test_case_fold_study_rejects_changed_search_space_version(
             n_trials=1,
             storage=storage,
             study_name="case_fold_demo",
+            prepared_by_fold=prepared,
+            fold_runner=fake_runner,
+        )
+
+
+@pytest.mark.parametrize(
+    ("pairwise_beta", "min_pairwise_recall"),
+    [
+        (1.0, None),
+        (DEFAULT_PAIRWISE_BETA, 0.7),
+    ],
+)
+def test_case_fold_study_rejects_changed_pairwise_objective_settings(
+    tmp_path: Path,
+    pairwise_beta: float,
+    min_pairwise_recall: float | None,
+) -> None:
+    folds = [CaseFoldTuningFold("fold_a", "case_a", ["case_b"])]
+    storage = f"sqlite:///{tmp_path / 'optuna.db'}"
+    prepared = _prepared_by_fold_stub(tmp_path, folds)
+
+    def fake_runner(
+        fold: CaseFoldTuningFold,
+        _prepared_runs: dict,
+        _trial_fold_dir: Path,
+        _params: dict,
+        _match_threshold: float,
+        _enable_shap: bool,
+        _trial_number: int,
+    ) -> dict[str, Any]:
+        return _fold_row(fold.name, 0.4)
+
+    run_case_fold_optuna_study(
+        cases={},
+        folds=folds,
+        output_root=tmp_path,
+        n_trials=1,
+        storage=storage,
+        study_name="case_fold_demo",
+        prepared_by_fold=prepared,
+        fold_runner=fake_runner,
+    )
+
+    with pytest.raises(ValueError, match="fingerprint"):
+        run_case_fold_optuna_study(
+            cases={},
+            folds=folds,
+            output_root=tmp_path,
+            n_trials=1,
+            storage=storage,
+            study_name="case_fold_demo",
+            pairwise_beta=pairwise_beta,
+            min_pairwise_recall=min_pairwise_recall,
             prepared_by_fold=prepared,
             fold_runner=fake_runner,
         )
