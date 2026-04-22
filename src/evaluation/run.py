@@ -37,7 +37,10 @@ from src.shared.paths import (
     get_extraction_run_output_dir,
     get_ingestion_run_output_dir,
 )
-from src.resolution.writer import get_resolved_entities_output_path
+from src.resolution.writer import (
+    get_resolution_diagnostics_path,
+    get_resolved_entities_output_path,
+)
 from src.shared import schemas
 from src.shared.config import PAIR_MATCH_THRESHOLD
 from src.synthetic.build_matching_dataset import LABELS_SCHEMA
@@ -226,6 +229,7 @@ def run_evaluation(
     candidate_pairs = bridge["candidate_pairs"]
     scored_pairs = _load_scored_pairs(data_dir, run_id)
     resolved_entities = _load_resolved_entities(data_dir, run_id)
+    resolution_diagnostics = _load_resolution_diagnostics(data_dir, run_id)
     predicted_mentions = bridge["predicted_mentions"]
     gold_group_by_entity = bridge["gold_group_by_entity"]
     bridge_summary = dict(bridge["bridge_summary"])
@@ -354,6 +358,7 @@ def run_evaluation(
                 "score_threshold": match_threshold,
                 **matching_scores,
             },
+            "resolution": resolution_diagnostics,
         },
         "error_analysis": {
             "extraction": summarize_extraction_errors(
@@ -478,6 +483,39 @@ def _finite_metric_value(value: Any) -> float | None:
     if not math.isfinite(numeric):
         return None
     return numeric
+
+
+def _load_resolution_diagnostics(data_dir: Path, run_id: str) -> dict[str, Any]:
+    """Load retained-graph diagnostics for the final evaluation report."""
+    diagnostics_path = get_resolution_diagnostics_path(data_dir, run_id)
+    if not diagnostics_path.exists():
+        return {}
+
+    payload = json.loads(diagnostics_path.read_text(encoding="utf-8"))
+    thresholds = payload.get("thresholds", {})
+    return {
+        "thresholds": {
+            "keep_score_threshold": thresholds.get("keep_score_threshold"),
+            "objective_neutral_threshold": thresholds.get(
+                "objective_neutral_threshold"
+            ),
+            "review_confidence_threshold": thresholds.get(
+                "review_confidence_threshold"
+            ),
+        },
+        "retained_edge_count": payload.get("retained_edge_count"),
+        "component_count": payload.get("component_count"),
+        "non_trivial_component_count": payload.get("non_trivial_component_count"),
+        "singleton_node_count": payload.get("singleton_node_count"),
+        "singleton_rate": payload.get("singleton_rate"),
+        "largest_component_size": payload.get("largest_component_size"),
+        "cluster_count": payload.get("cluster_count"),
+        "cluster_singleton_rate": payload.get("cluster_singleton_rate"),
+        "merged_edges_above_neutral_threshold": payload.get(
+            "merged_edges_above_neutral_threshold"
+        ),
+        "giant_component_warnings": payload.get("giant_component_warnings", []),
+    }
 
 
 def _load_gold_mentions(gold_path: Path) -> pl.DataFrame:
@@ -1340,6 +1378,8 @@ def _write_evaluation_markdown(report: Mapping[str, Any], path: Path) -> None:
     scope = report["metric_scope"]
     metrics = report["metrics"]
     stage_metrics = report["stage_metrics"]
+    resolution_stage = stage_metrics.get("resolution", {})
+    resolution_thresholds = resolution_stage.get("thresholds", {})
     alignment = report["alignment"]
     regression_checks = report["regression_checks"]
     error_analysis = report["error_analysis"]
@@ -1450,6 +1490,20 @@ def _write_evaluation_markdown(report: Mapping[str, Any], path: Path) -> None:
                     (
                         f"evaluated_pairs={stage_metrics['matching']['evaluated_candidate_pair_count']}, "
                         f"threshold={_format_markdown_metric(stage_metrics['matching']['score_threshold'])}"
+                    ),
+                ],
+                [
+                    "Resolution",
+                    "-",
+                    "-",
+                    "-",
+                    (
+                        f"retained_edges={resolution_stage.get('retained_edge_count', '-')}, "
+                        f"components={resolution_stage.get('component_count', '-')}, "
+                        "keep="
+                        f"{_format_markdown_metric(resolution_thresholds.get('keep_score_threshold', '-'))}, "
+                        "neutral="
+                        f"{_format_markdown_metric(resolution_thresholds.get('objective_neutral_threshold', '-'))}"
                     ),
                 ],
             ],

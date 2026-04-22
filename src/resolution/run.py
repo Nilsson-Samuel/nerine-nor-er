@@ -27,6 +27,7 @@ from src.resolution.clustering import (
     summarize_component_timing,
     summarize_timing_by_size_bucket,
     solve_retained_components,
+    validate_resolution_thresholds,
 )
 from src.resolution.confidence import (
     compute_base_confidence,
@@ -34,7 +35,11 @@ from src.resolution.confidence import (
     route_cluster,
     routing_actions_by_profile,
 )
-from src.shared.config import OBJECTIVE_NEUTRAL_THRESHOLD, ROUTING_PROFILE
+from src.shared.config import (
+    KEEP_SCORE_THRESHOLD,
+    OBJECTIVE_NEUTRAL_THRESHOLD,
+    ROUTING_PROFILE,
+)
 from src.shared import schemas
 from src.resolution.writer import (
     build_resolved_entities_table,
@@ -46,7 +51,6 @@ from src.resolution.writer import (
     write_resolved_entities,
 )
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -56,7 +60,9 @@ PROGRESS_LOG_COMPONENT_INTERVAL = 25
 
 def _load_entities_frame(data_dir: Path | str, run_id: str) -> pl.DataFrame:
     """Load one run from entities.parquet for clustering and lineage joins."""
-    table = pq.read_table(get_extraction_run_output_dir(data_dir, run_id) / "entities.parquet")
+    table = pq.read_table(
+        get_extraction_run_output_dir(data_dir, run_id) / "entities.parquet"
+    )
     errors = schemas.validate_contract_rules(table, "entities")
     if errors:
         raise ValueError(f"entities failed contract validation: {errors}")
@@ -91,6 +97,8 @@ def _load_scored_pairs_frame(data_dir: Path | str, run_id: str) -> pl.DataFrame:
 def _make_cluster_rows(
     components: list[ComponentState],
     solved_components: list[SolvedComponent],
+    *,
+    neutral_threshold: float = OBJECTIVE_NEUTRAL_THRESHOLD,
 ) -> list[dict[str, Any]]:
     """Build JSON-safe cluster rows with evidence and routing metadata."""
     component_by_id = {component.component_id: component for component in components}
@@ -111,7 +119,9 @@ def _make_cluster_rows(
                     "entity_ids": list(evidence.entity_ids),
                     "cluster_size": evidence.cluster_size,
                     "clustering_method": solved_component.clustering_method,
-                    "component_objective_score": round(solved_component.objective_score, 6),
+                    "component_objective_score": round(
+                        solved_component.objective_score, 6
+                    ),
                     "component_solve_elapsed_ms": round(solved_component.elapsed_ms, 3),
                     "pivot_run_count": solved_component.run_count,
                     "actual_edge_count": evidence.actual_edge_count,
@@ -129,7 +139,7 @@ def _make_cluster_rows(
                     "suspicious_merge": (
                         evidence.cluster_size > 1
                         and (
-                            evidence.min_edge_score < OBJECTIVE_NEUTRAL_THRESHOLD
+                            evidence.min_edge_score < neutral_threshold
                             or evidence.density < 1.0
                         )
                     ),
@@ -327,7 +337,9 @@ def _build_enriched_diagnostics(
             "cluster_count": len(cluster_rows),
             "cluster_singleton_count": cluster_singleton_count,
             "cluster_singleton_rate": (
-                round(cluster_singleton_count / len(cluster_rows), 6) if cluster_rows else 0.0
+                round(cluster_singleton_count / len(cluster_rows), 6)
+                if cluster_rows
+                else 0.0
             ),
             "cluster_size_distribution": _size_distribution(cluster_sizes),
             "giant_cluster_warnings": _giant_cluster_warnings(
@@ -356,9 +368,19 @@ def _build_enriched_diagnostics(
     return diagnostics
 
 
-def run_resolution(data_dir: Path | str, run_id: str) -> dict[str, Any]:
+def run_resolution(
+    data_dir: Path | str,
+    run_id: str,
+    *,
+    keep_score_threshold: float = KEEP_SCORE_THRESHOLD,
+    objective_neutral_threshold: float = OBJECTIVE_NEUTRAL_THRESHOLD,
+) -> dict[str, Any]:
     """Run retained-component clustering and persist final resolution artifacts."""
     start = perf_counter()
+    keep_score_threshold, objective_neutral_threshold = validate_resolution_thresholds(
+        keep_score_threshold,
+        objective_neutral_threshold,
+    )
     data_dir = Path(data_dir)
     data_dir.mkdir(parents=True, exist_ok=True)
     components_path = get_resolution_components_path(data_dir, run_id)
@@ -369,7 +391,13 @@ def run_resolution(data_dir: Path | str, run_id: str) -> dict[str, Any]:
     entities = _load_entities_frame(data_dir, run_id)
     scored_pairs = _load_scored_pairs_frame(data_dir, run_id)
     entity_ids = entities.get_column("entity_id").to_list()
-    components, phase1_diagnostics = build_phase1_components(run_id, scored_pairs, entity_ids)
+    components, phase1_diagnostics = build_phase1_components(
+        run_id,
+        scored_pairs,
+        entity_ids,
+        keep_threshold=keep_score_threshold,
+        neutral_threshold=objective_neutral_threshold,
+    )
     _log_resolution_start(run_id, phase1_diagnostics)
 
     def log_progress(
@@ -392,7 +420,11 @@ def run_resolution(data_dir: Path | str, run_id: str) -> dict[str, Any]:
         progress_every=PROGRESS_LOG_COMPONENT_INTERVAL,
         progress_callback=log_progress,
     )
-    cluster_rows = _make_cluster_rows(components, solved_components)
+    cluster_rows = _make_cluster_rows(
+        components,
+        solved_components,
+        neutral_threshold=objective_neutral_threshold,
+    )
     cluster_records = build_cluster_records(cluster_rows, entities, scored_pairs)
     resolved_rows = build_resolved_entity_rows(cluster_records)
     resolved_entities_table = build_resolved_entities_table(resolved_rows)
@@ -401,7 +433,9 @@ def run_resolution(data_dir: Path | str, run_id: str) -> dict[str, Any]:
         "resolved_entities",
     )
     if resolved_errors:
-        raise ValueError(f"resolved_entities failed contract validation: {resolved_errors}")
+        raise ValueError(
+            f"resolved_entities failed contract validation: {resolved_errors}"
+        )
 
     diagnostics = _build_enriched_diagnostics(
         phase1_diagnostics,

@@ -32,6 +32,8 @@ from src.matching.fold_tuning import (
     FOLD_TUNING_REPORT_FILENAME,
     FOLD_TUNING_SUMMARY_FILENAME,
     FOLD_TUNING_TRIALS_FILENAME,
+    RESOLUTION_KEEP_THRESHOLD_PARAM,
+    RESOLUTION_NEUTRAL_THRESHOLD_PARAM,
     CaseFoldTuningCase,
     CaseFoldTuningFold,
     PreparedCaseRun,
@@ -1233,6 +1235,10 @@ def test_case_fold_study_writes_best_params_and_uses_persistent_storage(
     assert artifact["objective_beta"] == DEFAULT_PAIRWISE_BETA
     assert artifact["fold_count"] == 2
     assert artifact["n_trials_completed"] == 2
+    assert set(artifact["best_resolution_thresholds"]) == {
+        RESOLUTION_KEEP_THRESHOLD_PARAM,
+        RESOLUTION_NEUTRAL_THRESHOLD_PARAM,
+    }
     assert set(artifact["best_params"]) == {
         "learning_rate",
         "n_estimators",
@@ -1292,11 +1298,17 @@ def test_case_fold_study_writes_readable_tuning_reports(tmp_path: Path) -> None:
 
     assert summary["best_value"] == pytest.approx(0.65)
     assert summary_payload["best_params"]
+    assert set(summary_payload["best_resolution_thresholds"]) == {
+        RESOLUTION_KEEP_THRESHOLD_PARAM,
+        RESOLUTION_NEUTRAL_THRESHOLD_PARAM,
+    }
     assert summary_payload["n_trials_completed"] == 2
     assert len(trial_rows) == 4
     assert trial_rows[0]["fold_name"] == "fold_a"
     assert float(trial_rows[0]["pairwise_f_beta"]) == pytest.approx(0.45)
     assert trial_rows[0]["pairwise_beta"] == "0.5"
+    assert trial_rows[0][RESOLUTION_KEEP_THRESHOLD_PARAM]
+    assert trial_rows[0][RESOLUTION_NEUTRAL_THRESHOLD_PARAM]
     assert float(trial_rows[0]["pairwise_f0_5"]) == pytest.approx(0.45)
     assert "Best Params" in report
     assert "Optuna completed trial count" in report
@@ -1305,6 +1317,8 @@ def test_case_fold_study_writes_readable_tuning_reports(tmp_path: Path) -> None:
     assert "Best params artifact written" in report
     assert "Pairwise F-beta" in report
     assert "Pairwise beta" in report
+    assert "Keep threshold" in report
+    assert "Neutral threshold" in report
     assert "B-cubed R" in report
     assert "Pairwise P" in report
 

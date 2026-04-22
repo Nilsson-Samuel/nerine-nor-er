@@ -35,7 +35,6 @@ from src.shared.config import (
     OBJECTIVE_NEUTRAL_THRESHOLD,
 )
 
-
 # Skip Pivot when a retained component is too small to express a real contradiction.
 TRIVIAL_NODE_LIMIT = 2
 TRIVIAL_EDGE_LIMIT = 1
@@ -52,6 +51,9 @@ GIANT_COMPONENT_NODE_WARNING_SIZE = 25
 
 # Warn when one component absorbs a large share of the retained graph.
 GIANT_COMPONENT_SHARE_WARNING = 0.15
+
+# The neutral point should leave enough retained weak edges to act as split evidence.
+MIN_OBJECTIVE_NEUTRAL_GAP = 0.10
 
 PAIR_COLUMNS = ["run_id", "entity_id_a", "entity_id_b", "score"]
 
@@ -103,6 +105,25 @@ def include_edge(score: float, threshold: float = KEEP_SCORE_THRESHOLD) -> bool:
     return float(score) >= float(threshold)
 
 
+def validate_resolution_thresholds(
+    keep_threshold: float,
+    neutral_threshold: float,
+) -> tuple[float, float]:
+    """Validate retained-graph and objective thresholds as one policy."""
+    keep = float(keep_threshold)
+    neutral = float(neutral_threshold)
+    if not 0.0 <= keep <= 1.0:
+        raise ValueError("keep_score_threshold must be in [0, 1]")
+    if not 0.0 <= neutral <= 1.0:
+        raise ValueError("objective_neutral_threshold must be in [0, 1]")
+    if neutral + MIN_OBJECTIVE_GAIN < keep + MIN_OBJECTIVE_NEUTRAL_GAP:
+        raise ValueError(
+            "objective_neutral_threshold must be at least 0.10 above "
+            "keep_score_threshold"
+        )
+    return keep, neutral
+
+
 def score_to_objective_weight(
     score: float,
     neutral_threshold: float = OBJECTIVE_NEUTRAL_THRESHOLD,
@@ -145,9 +166,9 @@ def build_retained_graph(
             f"{unknown_entity_ids[:5]}"
         )
 
-    retained_pairs = scored_pairs.filter(pl.col("score") >= float(keep_threshold)).select(
-        ["entity_id_a", "entity_id_b", "score"]
-    )
+    retained_pairs = scored_pairs.filter(
+        pl.col("score") >= float(keep_threshold)
+    ).select(["entity_id_a", "entity_id_b", "score"])
     if retained_pairs.is_empty():
         return graph
 
@@ -180,7 +201,9 @@ def build_component_state(
             edge_key = (entity_id_b, entity_id_a)
         edge_score = float(score)
         edge_scores[edge_key] = edge_score
-        objective_weights[edge_key] = score_to_objective_weight(edge_score, neutral_threshold)
+        objective_weights[edge_key] = score_to_objective_weight(
+            edge_score, neutral_threshold
+        )
 
     for entity_id in entity_ids:
         neighbors = tuple(sorted(subgraph.neighbors(entity_id)))
@@ -222,7 +245,9 @@ def build_component_states(
     return sorted(components, key=lambda component: component.entity_ids)
 
 
-def _cluster_signature(clusters: tuple[tuple[str, ...], ...]) -> tuple[tuple[str, ...], ...]:
+def _cluster_signature(
+    clusters: tuple[tuple[str, ...], ...],
+) -> tuple[tuple[str, ...], ...]:
     """Return a deterministic comparable representation of cluster assignments."""
     return tuple(
         sorted(
@@ -458,7 +483,9 @@ def summarize_components(
             row.update(
                 {
                     "cluster_count": len(solved_component.clusters),
-                    "clusters": [list(cluster) for cluster in solved_component.clusters],
+                    "clusters": [
+                        list(cluster) for cluster in solved_component.clusters
+                    ],
                     "clustering_method": solved_component.clustering_method,
                     "objective_score": round(solved_component.objective_score, 6),
                     "pivot_run_count": solved_component.run_count,
@@ -621,7 +648,11 @@ def summarize_component_timing(
     elapsed_values = sorted(float(row["elapsed_ms"]) for row in timing_rows)
     slowest_row = max(
         timing_rows,
-        key=lambda row: (float(row["elapsed_ms"]), int(row["node_count"]), row["component_id"]),
+        key=lambda row: (
+            float(row["elapsed_ms"]),
+            int(row["node_count"]),
+            row["component_id"],
+        ),
     )
     return {
         "component_count": len(timing_rows),
@@ -639,8 +670,13 @@ def build_resolution_diagnostics(
     scored_pairs: pl.DataFrame,
     components: list[ComponentState],
     keep_threshold: float = KEEP_SCORE_THRESHOLD,
+    neutral_threshold: float = OBJECTIVE_NEUTRAL_THRESHOLD,
 ) -> dict[str, Any]:
     """Build deterministic retained-graph diagnostics."""
+    keep_threshold, neutral_threshold = validate_resolution_thresholds(
+        keep_threshold,
+        neutral_threshold,
+    )
     component_sizes = [len(component.entity_ids) for component in components]
     total_node_count = sum(component_sizes)
     retained_edge_count = sum(component.retained_edge_count for component in components)
@@ -656,16 +692,20 @@ def build_resolution_diagnostics(
         "total_node_count": total_node_count,
         "singleton_node_count": singleton_node_count,
         "singleton_rate": (
-            round(singleton_node_count / total_node_count, 6) if total_node_count else 0.0
+            round(singleton_node_count / total_node_count, 6)
+            if total_node_count
+            else 0.0
         ),
         "trivial_component_count": trivial_component_count,
         "non_trivial_component_count": len(components) - trivial_component_count,
         "largest_component_size": largest_component_size,
         "component_size_distribution": _size_distribution(component_sizes),
-        "giant_component_warnings": _giant_component_warnings(component_sizes, total_node_count),
+        "giant_component_warnings": _giant_component_warnings(
+            component_sizes, total_node_count
+        ),
         "thresholds": {
             "keep_score_threshold": keep_threshold,
-            "objective_neutral_threshold": OBJECTIVE_NEUTRAL_THRESHOLD,
+            "objective_neutral_threshold": neutral_threshold,
             "review_confidence_threshold": BASE_CONFIDENCE_REVIEW_THRESHOLD,
         },
         "threshold_note": "provisional placeholder thresholds; phase-1 diagnostics only",
@@ -677,14 +717,22 @@ def build_phase1_components(
     scored_pairs: pl.DataFrame,
     entity_ids: list[str] | tuple[str, ...],
     keep_threshold: float = KEEP_SCORE_THRESHOLD,
+    neutral_threshold: float = OBJECTIVE_NEUTRAL_THRESHOLD,
 ) -> tuple[list[ComponentState], dict[str, Any]]:
     """Build retained components plus diagnostics from scored pair probabilities."""
+    keep_threshold, neutral_threshold = validate_resolution_thresholds(
+        keep_threshold,
+        neutral_threshold,
+    )
     retained_graph = build_retained_graph(scored_pairs, entity_ids, keep_threshold)
-    components = build_component_states(retained_graph)
+    components = build_component_states(
+        retained_graph, neutral_threshold=neutral_threshold
+    )
     diagnostics = build_resolution_diagnostics(
         run_id,
         scored_pairs,
         components,
         keep_threshold,
+        neutral_threshold,
     )
     return components, diagnostics

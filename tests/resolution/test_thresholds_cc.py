@@ -19,6 +19,7 @@ from src.resolution.clustering import (
     build_retained_graph,
     include_edge,
     make_component_id,
+    validate_resolution_thresholds,
 )
 from src.resolution.run import (
     get_resolution_components_path,
@@ -27,7 +28,6 @@ from src.resolution.run import (
 )
 from src.shared import schemas
 from src.shared.paths import get_extraction_run_output_dir
-
 
 PAIR_COLUMNS = ["run_id", "entity_id_a", "entity_id_b", "score"]
 
@@ -47,9 +47,15 @@ def _build_scored_pairs_table(rows: list[tuple[str, str, str, float]]) -> pa.Tab
             "entity_id_a": pa.array([row[1] for row in rows], type=pa.string()),
             "entity_id_b": pa.array([row[2] for row in rows], type=pa.string()),
             "score": pa.array([row[3] for row in rows], type=pa.float32()),
-            "model_version": pa.array(["resolution_fixture"] * row_count, type=pa.string()),
-            "scored_at": pa.array([scored_at] * row_count, type=pa.timestamp("us", tz="UTC")),
-            "blocking_methods": pa.array([["faiss"]] * row_count, type=pa.list_(pa.string())),
+            "model_version": pa.array(
+                ["resolution_fixture"] * row_count, type=pa.string()
+            ),
+            "scored_at": pa.array(
+                [scored_at] * row_count, type=pa.timestamp("us", tz="UTC")
+            ),
+            "blocking_methods": pa.array(
+                [["faiss"]] * row_count, type=pa.list_(pa.string())
+            ),
             "blocking_source": pa.array(["faiss"] * row_count, type=pa.string()),
             "blocking_method_count": pa.array([1] * row_count, type=pa.int8()),
             "shap_top5": pa.array(
@@ -67,15 +73,17 @@ def _build_entities_table(run_id: str, entity_ids: list[str]) -> pa.Table:
     positions = []
     for index in range(row_count):
         chunk_id = _hex32(200 + index)
-        positions.append([
-            {
-                "chunk_id": chunk_id,
-                "char_start": 0,
-                "char_end": 8,
-                "page_num": 0,
-                "source_unit_kind": "pdf_page",
-            }
-        ])
+        positions.append(
+            [
+                {
+                    "chunk_id": chunk_id,
+                    "char_start": 0,
+                    "char_end": 8,
+                    "page_num": 0,
+                    "source_unit_kind": "pdf_page",
+                }
+            ]
+        )
 
     return pa.table(
         {
@@ -89,7 +97,9 @@ def _build_entities_table(run_id: str, entity_ids: list[str]) -> pa.Table:
                 [_hex32(200 + index) for index in range(row_count)],
                 type=pa.string(),
             ),
-            "text": pa.array([f"entity_{index}" for index in range(row_count)], type=pa.string()),
+            "text": pa.array(
+                [f"entity_{index}" for index in range(row_count)], type=pa.string()
+            ),
             "normalized": pa.array(
                 [f"entity_{index}" for index in range(row_count)],
                 type=pa.string(),
@@ -147,9 +157,43 @@ def test_build_phase1_components_splits_toy_graph_deterministically() -> None:
     assert diagnostics["giant_component_warnings"] == []
 
 
+def test_build_phase1_components_uses_explicit_resolution_thresholds() -> None:
+    a, b, c = (_hex32(index) for index in range(1, 4))
+    scored_pairs = _build_scored_pairs_table(
+        [
+            ("run_resolution", a, b, 0.55),
+            ("run_resolution", b, c, 0.86),
+        ]
+    )
+
+    components, diagnostics = build_phase1_components(
+        "run_resolution",
+        pl.from_arrow(scored_pairs).select(PAIR_COLUMNS),
+        [a, b, c],
+        keep_threshold=0.50,
+        neutral_threshold=0.85,
+    )
+
+    assert len(components) == 1
+    assert components[0].retained_edge_count == 2
+    assert components[0].objective_weights[(a, b)] == pytest.approx(-0.30)
+    assert components[0].objective_weights[(b, c)] == pytest.approx(0.01, abs=1e-6)
+    assert diagnostics["thresholds"]["keep_score_threshold"] == 0.50
+    assert diagnostics["thresholds"]["objective_neutral_threshold"] == 0.85
+
+
+def test_resolution_threshold_validation_requires_neutral_gap() -> None:
+    assert validate_resolution_thresholds(0.56, 0.66) == (0.56, 0.66)
+
+    with pytest.raises(ValueError, match="at least 0.10 above"):
+        validate_resolution_thresholds(0.70, 0.75)
+
+
 def test_make_component_id_is_order_independent() -> None:
     entity_ids = [_hex32(3), _hex32(1), _hex32(2)]
-    assert make_component_id(entity_ids) == make_component_id(list(reversed(entity_ids)))
+    assert make_component_id(entity_ids) == make_component_id(
+        list(reversed(entity_ids))
+    )
 
 
 def test_build_phase1_components_keeps_entities_without_scored_pairs() -> None:
@@ -172,7 +216,9 @@ def test_build_phase1_components_keeps_entities_without_scored_pairs() -> None:
     assert diagnostics["singleton_rate"] == pytest.approx(0.5, abs=1e-6)
 
 
-def test_build_retained_graph_excludes_below_threshold_edges_and_keeps_known_nodes() -> None:
+def test_build_retained_graph_excludes_below_threshold_edges_and_keeps_known_nodes() -> (
+    None
+):
     a, b, c = (_hex32(index) for index in range(1, 4))
     scored_pairs = pl.from_arrow(
         _build_scored_pairs_table(
@@ -194,7 +240,9 @@ def test_build_retained_graph_excludes_below_threshold_edges_and_keeps_known_nod
     assert graph.degree(c) == 0
 
 
-def test_build_retained_graph_raises_for_unknown_entities_even_below_threshold() -> None:
+def test_build_retained_graph_raises_for_unknown_entities_even_below_threshold() -> (
+    None
+):
     a, b, unknown = (_hex32(index) for index in range(1, 4))
     scored_pairs = pl.from_arrow(
         _build_scored_pairs_table(
@@ -209,7 +257,9 @@ def test_build_retained_graph_raises_for_unknown_entities_even_below_threshold()
         build_retained_graph(scored_pairs, [a, b])
 
 
-def test_run_resolution_writes_component_and_diagnostic_artifacts(tmp_path: Path) -> None:
+def test_run_resolution_writes_component_and_diagnostic_artifacts(
+    tmp_path: Path,
+) -> None:
     a, b, c, d, e = (_hex32(index) for index in range(1, 6))
     entities_dir = get_extraction_run_output_dir(tmp_path, "run_resolution")
     entities_dir.mkdir(parents=True, exist_ok=True)
@@ -242,7 +292,9 @@ def test_run_resolution_writes_component_and_diagnostic_artifacts(tmp_path: Path
     assert not (tmp_path / "resolution_diagnostics.json").exists()
     assert components_payload["run_id"] == "run_resolution"
     assert components_payload["component_count"] == 3
-    assert [component["entity_ids"] for component in components_payload["components"]] == [
+    assert [
+        component["entity_ids"] for component in components_payload["components"]
+    ] == [
         [a, b],
         [c, d],
         [e],
@@ -289,8 +341,9 @@ def test_run_resolution_logs_start_summary_and_finish(
     assert (
         "Resolution progress run_id=run_resolution_logging solved_components=2/3"
     ) in caplog.text
-    assert "Resolution complete run_id=run_resolution_logging retained_component_count=3" in (
-        caplog.text
+    assert (
+        "Resolution complete run_id=run_resolution_logging retained_component_count=3"
+        in (caplog.text)
     )
     assert "retained_edge_count=2 resolved_cluster_count=3" in caplog.text
     assert "total_elapsed_seconds=" in caplog.text
@@ -328,7 +381,10 @@ def test_run_resolution_raises_for_missing_run_id(tmp_path: Path) -> None:
 
 def test_build_phase1_components_flags_giant_component_warning() -> None:
     nodes = [_hex32(index) for index in range(1, 31)]
-    rows = [("run_big_component", nodes[index], nodes[index + 1], 0.90) for index in range(29)]
+    rows = [
+        ("run_big_component", nodes[index], nodes[index + 1], 0.90)
+        for index in range(29)
+    ]
     rows.append(("run_big_component", _hex32(100), _hex32(101), 0.10))
     table = _build_scored_pairs_table(rows)
 

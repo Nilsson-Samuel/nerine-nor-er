@@ -206,6 +206,28 @@ def train_and_save_fold_model(
     }
 
 
+def _resolution_diagnostic_fields(evaluation_report: dict[str, Any]) -> dict[str, Any]:
+    """Extract retained-graph diagnostics when evaluation recorded them."""
+    resolution = evaluation_report.get("stage_metrics", {}).get("resolution", {})
+    if not resolution:
+        return {}
+
+    thresholds = resolution.get("thresholds", {})
+    fields = {
+        "keep_score_threshold": thresholds.get("keep_score_threshold"),
+        "objective_neutral_threshold": thresholds.get("objective_neutral_threshold"),
+        "retained_edge_count": resolution.get("retained_edge_count"),
+        "component_count": resolution.get("component_count"),
+        "non_trivial_component_count": resolution.get("non_trivial_component_count"),
+        "largest_component_size": resolution.get("largest_component_size"),
+        "cluster_count": resolution.get("cluster_count"),
+        "merged_edges_above_neutral_threshold": resolution.get(
+            "merged_edges_above_neutral_threshold"
+        ),
+    }
+    return {key: value for key, value in fields.items() if value is not None}
+
+
 def build_fold_summary_row(
     *,
     fold_name: str,
@@ -224,7 +246,7 @@ def build_fold_summary_row(
     if blocking_recall is None:
         blocking_recall = blocking["positive_pair_recall"]
 
-    return {
+    row = {
         "fold_name": fold_name,
         "held_out_case": held_out_case,
         "train_cases": list(train_cases),
@@ -251,6 +273,8 @@ def build_fold_summary_row(
         "matching_pairwise_recall": float(matching["recall"]),
         "matching_pairwise_f1": float(matching["f1"]),
     }
+    row.update(_resolution_diagnostic_fields(evaluation_report))
+    return row
 
 
 def build_macro_average_row(rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -343,6 +367,26 @@ def write_fold_summary_markdown(path: Path | str, payload: dict[str, Any]) -> No
         _markdown_table(
             ["Signal", "Value"],
             [
+                *(
+                    [
+                        [
+                            "Resolution keep threshold",
+                            _format_markdown_metric(
+                                summary_row["keep_score_threshold"]
+                            ),
+                        ],
+                        [
+                            "Resolution neutral threshold",
+                            _format_markdown_metric(
+                                summary_row["objective_neutral_threshold"]
+                            ),
+                        ],
+                        ["Retained edges", summary_row["retained_edge_count"]],
+                        ["Retained components", summary_row["component_count"]],
+                    ]
+                    if "keep_score_threshold" in summary_row
+                    else []
+                ),
                 [
                     "Blocking gold-positive-pair recall",
                     _format_markdown_metric(
@@ -399,6 +443,21 @@ def write_aggregate_fold_reports_markdown(
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     macro_row = build_macro_average_row(rows)
+    include_resolution_thresholds = all("keep_score_threshold" in row for row in rows)
+    threshold_headers = (
+        ["Keep threshold", "Neutral threshold"] if include_resolution_thresholds else []
+    )
+    threshold_cells_by_row = [
+        (
+            [
+                _format_markdown_metric(row["keep_score_threshold"]),
+                _format_markdown_metric(row["objective_neutral_threshold"]),
+            ]
+            if include_resolution_thresholds
+            else []
+        )
+        for row in rows
+    ]
     lines = [
         "# Case-Fold Evaluation Overview",
         "",
@@ -408,6 +467,7 @@ def write_aggregate_fold_reports_markdown(
             [
                 "Fold",
                 "Held-out case",
+                *threshold_headers,
                 "Pairwise P",
                 "Pairwise R",
                 "Pairwise F1",
@@ -427,6 +487,7 @@ def write_aggregate_fold_reports_markdown(
                 [
                     row["fold_name"],
                     row["held_out_case"],
+                    *threshold_cells,
                     _format_markdown_metric(row["pairwise_precision"]),
                     _format_markdown_metric(row["pairwise_recall"]),
                     _format_markdown_metric(row["pairwise_f1"]),
@@ -442,12 +503,13 @@ def write_aggregate_fold_reports_markdown(
                     _format_markdown_metric(row["matching_pairwise_recall"]),
                     _format_markdown_metric(row["matching_pairwise_f1"]),
                 ]
-                for row in rows
+                for row, threshold_cells in zip(rows, threshold_cells_by_row)
             ]
             + [
                 [
                     macro_row["fold_name"],
                     macro_row["held_out_case"],
+                    *(["-", "-"] if include_resolution_thresholds else []),
                     _format_markdown_metric(macro_row["pairwise_precision"]),
                     _format_markdown_metric(macro_row["pairwise_recall"]),
                     _format_markdown_metric(macro_row["pairwise_f1"]),

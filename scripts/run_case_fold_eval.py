@@ -48,7 +48,8 @@ from src.shared.paths import (
     get_evaluation_markdown_report_path,
     get_evaluation_report_path,
 )
-
+from src.resolution.clustering import validate_resolution_thresholds
+from src.shared.config import KEEP_SCORE_THRESHOLD, OBJECTIVE_NEUTRAL_THRESHOLD
 
 logger = logging.getLogger(__name__)
 
@@ -84,7 +85,9 @@ class CaseRun:
 def parse_args() -> argparse.Namespace:
     """Parse CLI arguments for manual fold execution."""
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("config", type=Path, help="JSON file describing cases and folds.")
+    parser.add_argument(
+        "config", type=Path, help="JSON file describing cases and folds."
+    )
     parser.add_argument(
         "--output-root",
         type=Path,
@@ -104,6 +107,18 @@ def parse_args() -> argparse.Namespace:
         help="Score threshold for held-out matching evaluation.",
     )
     parser.add_argument(
+        "--keep-score-threshold",
+        type=float,
+        default=KEEP_SCORE_THRESHOLD,
+        help="Minimum score retained as a resolution graph edge.",
+    )
+    parser.add_argument(
+        "--objective-neutral-threshold",
+        type=float,
+        default=OBJECTIVE_NEUTRAL_THRESHOLD,
+        help="Retained-edge score where resolution evidence turns merge-positive.",
+    )
+    parser.add_argument(
         "--enable-shap",
         action="store_true",
         help="Generate SHAP explanations for held-out scoring only.",
@@ -117,7 +132,9 @@ def _configure_logging() -> None:
         logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 
 
-def _resolve_config_path(base_dir: Path, raw_path: str | None, default_path: Path) -> Path:
+def _resolve_config_path(
+    base_dir: Path, raw_path: str | None, default_path: Path
+) -> Path:
     """Resolve a config-relative path, falling back to the fold-case default."""
     if raw_path is None:
         return default_path.resolve()
@@ -127,11 +144,15 @@ def _resolve_config_path(base_dir: Path, raw_path: str | None, default_path: Pat
     return path
 
 
-def _parse_case_configs(payload: dict[str, Any], config_path: Path) -> dict[str, CaseConfig]:
+def _parse_case_configs(
+    payload: dict[str, Any], config_path: Path
+) -> dict[str, CaseConfig]:
     """Load named case inputs and apply repo-friendly defaults."""
     base_dir = config_path.parent.resolve()
     source_root_raw = payload.get("source_root", "data/raw")
-    source_root = _resolve_config_path(base_dir, str(source_root_raw), Path.cwd() / "data/raw")
+    source_root = _resolve_config_path(
+        base_dir, str(source_root_raw), Path.cwd() / "data/raw"
+    )
     raw_cases = payload.get("cases")
     if not isinstance(raw_cases, dict) or not raw_cases:
         raise ValueError("config must define a non-empty 'cases' object")
@@ -144,12 +165,20 @@ def _parse_case_configs(payload: dict[str, Any], config_path: Path) -> dict[str,
         default_gold_path = (
             default_case_root / "annotation" / "gold_annotations.group_id_reviewed.csv"
         )
-        case_root = _resolve_config_path(base_dir, raw_case.get("case_root"), default_case_root)
-        gold_path = _resolve_config_path(base_dir, raw_case.get("gold_path"), default_gold_path)
+        case_root = _resolve_config_path(
+            base_dir, raw_case.get("case_root"), default_case_root
+        )
+        gold_path = _resolve_config_path(
+            base_dir, raw_case.get("gold_path"), default_gold_path
+        )
         if not case_root.exists():
-            raise FileNotFoundError(f"case_root does not exist for {case_name}: {case_root}")
+            raise FileNotFoundError(
+                f"case_root does not exist for {case_name}: {case_root}"
+            )
         if not gold_path.exists():
-            raise FileNotFoundError(f"gold_path does not exist for {case_name}: {gold_path}")
+            raise FileNotFoundError(
+                f"gold_path does not exist for {case_name}: {gold_path}"
+            )
         cases[case_name] = CaseConfig(
             name=case_name,
             case_root=case_root,
@@ -171,7 +200,9 @@ def _parse_fold_configs(payload: dict[str, Any]) -> list[FoldConfig]:
             raise ValueError("each fold entry must be an object")
         fold_name = str(raw_fold.get("name", "")).strip()
         held_out_case = str(raw_fold.get("held_out_case", "")).strip()
-        train_cases = [str(case_name).strip() for case_name in raw_fold.get("train_cases", [])]
+        train_cases = [
+            str(case_name).strip() for case_name in raw_fold.get("train_cases", [])
+        ]
         if not fold_name:
             raise ValueError("fold name must be a non-empty string")
         if fold_name in seen_names:
@@ -195,7 +226,9 @@ def _parse_fold_configs(payload: dict[str, Any]) -> list[FoldConfig]:
     return folds
 
 
-def _load_runner_config(config_path: Path) -> tuple[dict[str, CaseConfig], list[FoldConfig]]:
+def _load_runner_config(
+    config_path: Path,
+) -> tuple[dict[str, CaseConfig], list[FoldConfig]]:
     """Read and validate the case-fold runner config JSON."""
     payload = json.loads(config_path.read_text(encoding="utf-8"))
     cases = _parse_case_configs(payload, config_path)
@@ -204,18 +237,24 @@ def _load_runner_config(config_path: Path) -> tuple[dict[str, CaseConfig], list[
         referenced_cases = [*fold.train_cases, fold.held_out_case]
         for case_name in referenced_cases:
             if case_name not in cases:
-                raise ValueError(f"fold {fold.name} references unknown case: {case_name}")
+                raise ValueError(
+                    f"fold {fold.name} references unknown case: {case_name}"
+                )
     return cases, folds
 
 
-def _filter_folds(folds: list[FoldConfig], selected_names: list[str] | None) -> list[FoldConfig]:
+def _filter_folds(
+    folds: list[FoldConfig], selected_names: list[str] | None
+) -> list[FoldConfig]:
     """Keep only requested folds when the user narrows execution."""
     if not selected_names:
         return folds
     selected = set(selected_names)
     filtered = [fold for fold in folds if fold.name in selected]
     if not filtered:
-        raise ValueError(f"no configured folds matched --fold-name values: {sorted(selected)}")
+        raise ValueError(
+            f"no configured folds matched --fold-name values: {sorted(selected)}"
+        )
     return filtered
 
 
@@ -233,7 +272,9 @@ def _ordered_case_names(fold: FoldConfig) -> list[str]:
     return ordered
 
 
-def _run_case_feature_pipeline(case: CaseConfig, fold_dir: Path, fold_name: str) -> CaseRun:
+def _run_case_feature_pipeline(
+    case: CaseConfig, fold_dir: Path, fold_name: str
+) -> CaseRun:
     """Run feature-producing stages for one case inside one fold."""
     from src.blocking.run import run_blocking
     from src.extraction.run import run_extraction
@@ -303,6 +344,8 @@ def _evaluate_held_out_case(
     case_run: CaseRun,
     *,
     match_threshold: float,
+    keep_score_threshold: float,
+    objective_neutral_threshold: float,
     enable_shap: bool,
 ) -> dict[str, Any]:
     """Score, resolve, and evaluate the held-out case with the frozen fold model."""
@@ -316,7 +359,12 @@ def _evaluate_held_out_case(
         model_dir=fold_dir,
         enable_shap=enable_shap,
     )
-    run_resolution(case_run.data_dir, case_run.run_id)
+    run_resolution(
+        case_run.data_dir,
+        case_run.run_id,
+        keep_score_threshold=keep_score_threshold,
+        objective_neutral_threshold=objective_neutral_threshold,
+    )
     return run_evaluation(
         case_run.data_dir,
         case_run.run_id,
@@ -331,9 +379,15 @@ def run_fold(
     output_root: Path,
     *,
     match_threshold: float,
+    keep_score_threshold: float,
+    objective_neutral_threshold: float,
     enable_shap: bool,
 ) -> dict[str, Any]:
     """Run one fold end to end and write per-fold summary artifacts."""
+    keep_score_threshold, objective_neutral_threshold = validate_resolution_thresholds(
+        keep_score_threshold,
+        objective_neutral_threshold,
+    )
     fold_dir = output_root / fold.name
     fold_dir.mkdir(parents=True, exist_ok=True)
     case_runs = {
@@ -347,6 +401,8 @@ def run_fold(
         fold_dir,
         held_out_run,
         match_threshold=match_threshold,
+        keep_score_threshold=keep_score_threshold,
+        objective_neutral_threshold=objective_neutral_threshold,
         enable_shap=enable_shap,
     )
     summary_row = build_fold_summary_row(
@@ -363,6 +419,10 @@ def run_fold(
         "train_cases": fold.train_cases,
         "fold_dir": str(fold_dir),
         "generated_at": datetime.now(timezone.utc).isoformat(),
+        "resolution_thresholds": {
+            "keep_score_threshold": keep_score_threshold,
+            "objective_neutral_threshold": objective_neutral_threshold,
+        },
         "training": training_result,
         "held_out_run": {
             "case_name": held_out_run.case_name,
@@ -391,6 +451,10 @@ def main() -> int:
     _configure_logging()
     cases, folds = _load_runner_config(args.config.resolve())
     selected_folds = _filter_folds(folds, args.fold_name)
+    keep_score_threshold, objective_neutral_threshold = validate_resolution_thresholds(
+        args.keep_score_threshold,
+        args.objective_neutral_threshold,
+    )
     output_root = args.output_root.resolve()
     output_root.mkdir(parents=True, exist_ok=True)
 
@@ -400,6 +464,8 @@ def main() -> int:
             cases,
             output_root,
             match_threshold=args.match_threshold,
+            keep_score_threshold=keep_score_threshold,
+            objective_neutral_threshold=objective_neutral_threshold,
             enable_shap=args.enable_shap,
         )
         for fold in selected_folds
@@ -414,6 +480,10 @@ def main() -> int:
         {
             "config_path": str(args.config.resolve()),
             "generated_at": datetime.now(timezone.utc).isoformat(),
+            "resolution_thresholds": {
+                "keep_score_threshold": keep_score_threshold,
+                "objective_neutral_threshold": objective_neutral_threshold,
+            },
             "fold_count": len(summary_rows),
             "folds": summary_rows,
         },

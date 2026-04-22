@@ -52,6 +52,11 @@ from src.matching.tuning import (
     suggest_lightgbm_params,
 )
 from src.matching.writer import get_features_output_path
+from src.resolution.clustering import (
+    MIN_OBJECTIVE_NEUTRAL_GAP,
+    validate_resolution_thresholds,
+)
+from src.shared.config import KEEP_SCORE_THRESHOLD, OBJECTIVE_NEUTRAL_THRESHOLD
 from src.shared import schemas
 from src.shared.paths import (
     get_blocking_run_output_dir,
@@ -74,11 +79,26 @@ CASE_FOLD_OBJECTIVE_METRIC = "pairwise_f_beta"
 CASE_FOLD_OBJECTIVE_NAME = "macro_mean_held_out_case_pairwise_f_beta"
 CASE_FOLD_FINGERPRINT_ATTR = "case_fold_fingerprint"
 CASE_FOLD_FINGERPRINT_HASH_ATTR = "case_fold_fingerprint_hash"
-CASE_FOLD_STUDY_FINGERPRINT_VERSION = 4
-CASE_FOLD_OBJECTIVE_VERSION = 2
-CASE_FOLD_SEARCH_SPACE_VERSION = 1
+CASE_FOLD_STUDY_FINGERPRINT_VERSION = 5
+CASE_FOLD_OBJECTIVE_VERSION = 3
+CASE_FOLD_SEARCH_SPACE_VERSION = 2
 DEFAULT_FAILED_TRIAL_VALUE = -1.0
 DEFAULT_PAIRWISE_BETA = 0.5
+RESOLUTION_KEEP_THRESHOLD_PARAM = "keep_score_threshold"
+RESOLUTION_NEUTRAL_THRESHOLD_PARAM = "objective_neutral_threshold"
+RESOLUTION_THRESHOLD_FIELDS = (
+    RESOLUTION_KEEP_THRESHOLD_PARAM,
+    RESOLUTION_NEUTRAL_THRESHOLD_PARAM,
+)
+RESOLUTION_THRESHOLD_SEARCH_SPACE = {
+    RESOLUTION_KEEP_THRESHOLD_PARAM: {"low": 0.45, "high": 0.75, "step": 0.01},
+    RESOLUTION_NEUTRAL_THRESHOLD_PARAM: {
+        "low": 0.65,
+        "high": 0.90,
+        "step": 0.01,
+        "min_gap_from_keep": MIN_OBJECTIVE_NEUTRAL_GAP,
+    },
+}
 
 
 FoldRunner = Callable[..., dict[str, Any]]
@@ -114,6 +134,70 @@ def _validate_min_pairwise_recall(min_pairwise_recall: float | None) -> None:
         raise ValueError("min_pairwise_recall must be between 0.0 and 1.0")
 
 
+def _rounded_threshold(value: float) -> float:
+    """Use stable report values for step-based threshold trials."""
+    return round(float(value), 2)
+
+
+def _training_params_from_trial_params(params: dict[str, Any]) -> dict[str, Any]:
+    """Keep resolution-only trial parameters out of LightGBM training."""
+    return {
+        key: value
+        for key, value in params.items()
+        if key not in RESOLUTION_THRESHOLD_FIELDS
+    }
+
+
+def _resolution_thresholds_from_trial_params(
+    params: dict[str, Any],
+) -> dict[str, float]:
+    """Read resolution thresholds from trial params, falling back to defaults."""
+    keep_threshold = params.get(RESOLUTION_KEEP_THRESHOLD_PARAM, KEEP_SCORE_THRESHOLD)
+    neutral_threshold = params.get(
+        RESOLUTION_NEUTRAL_THRESHOLD_PARAM,
+        OBJECTIVE_NEUTRAL_THRESHOLD,
+    )
+    keep_threshold, neutral_threshold = validate_resolution_thresholds(
+        keep_threshold,
+        neutral_threshold,
+    )
+    return {
+        RESOLUTION_KEEP_THRESHOLD_PARAM: _rounded_threshold(keep_threshold),
+        RESOLUTION_NEUTRAL_THRESHOLD_PARAM: _rounded_threshold(neutral_threshold),
+    }
+
+
+def suggest_resolution_thresholds(trial: Any) -> dict[str, float]:
+    """Suggest a valid retained-graph and objective-threshold pair."""
+    keep_threshold = _rounded_threshold(
+        trial.suggest_float(
+            RESOLUTION_KEEP_THRESHOLD_PARAM,
+            0.45,
+            0.75,
+            step=0.01,
+        )
+    )
+    neutral_low = _rounded_threshold(
+        max(0.65, keep_threshold + MIN_OBJECTIVE_NEUTRAL_GAP)
+    )
+    neutral_threshold = _rounded_threshold(
+        trial.suggest_float(
+            RESOLUTION_NEUTRAL_THRESHOLD_PARAM,
+            neutral_low,
+            0.90,
+            step=0.01,
+        )
+    )
+    keep_threshold, neutral_threshold = validate_resolution_thresholds(
+        keep_threshold,
+        neutral_threshold,
+    )
+    return {
+        RESOLUTION_KEEP_THRESHOLD_PARAM: keep_threshold,
+        RESOLUTION_NEUTRAL_THRESHOLD_PARAM: neutral_threshold,
+    }
+
+
 def _build_case_fold_study_fingerprint(
     folds: list[CaseFoldTuningFold],
     prepared_by_fold: dict[str, dict[str, PreparedCaseRun]],
@@ -135,6 +219,7 @@ def _build_case_fold_study_fingerprint(
         "search_space_version": CASE_FOLD_SEARCH_SPACE_VERSION,
         "objective": CASE_FOLD_OBJECTIVE_NAME,
         "objective_metric": CASE_FOLD_OBJECTIVE_METRIC,
+        "resolution_threshold_search_space": RESOLUTION_THRESHOLD_SEARCH_SPACE,
         "pairwise_beta": float(pairwise_beta),
         "min_pairwise_recall": min_pairwise_recall,
         "match_threshold": float(match_threshold),
@@ -504,6 +589,7 @@ def _write_failed_trial_summary(
     pairwise_beta: float,
 ) -> float:
     """Persist enough failure context without hiding the whole study."""
+    resolution_thresholds = _resolution_thresholds_from_trial_params(params)
     payload = {
         "status": "failed",
         "error": str(error),
@@ -511,6 +597,7 @@ def _write_failed_trial_summary(
         "objective": CASE_FOLD_OBJECTIVE_NAME,
         "objective_beta": float(pairwise_beta),
         "params": params,
+        "resolution_thresholds": resolution_thresholds,
         "folds_completed": rows,
         "penalty_value": failed_trial_value,
     }
@@ -520,6 +607,7 @@ def _write_failed_trial_summary(
     trial.set_user_attr("penalty_value", failed_trial_value)
     trial.set_user_attr("objective_metric", CASE_FOLD_OBJECTIVE_METRIC)
     trial.set_user_attr("objective_beta", float(pairwise_beta))
+    trial.set_user_attr("resolution_thresholds", resolution_thresholds)
     return float(failed_trial_value)
 
 
@@ -615,6 +703,20 @@ def _run_trial_fold(
     from src.matching.run import run_scoring
     from src.resolution.run import run_resolution
 
+    training_params = _training_params_from_trial_params(params)
+    resolution_thresholds = _resolution_thresholds_from_trial_params(params)
+    resolution_kwargs = (
+        {
+            "keep_score_threshold": resolution_thresholds[
+                RESOLUTION_KEEP_THRESHOLD_PARAM
+            ],
+            "objective_neutral_threshold": resolution_thresholds[
+                RESOLUTION_NEUTRAL_THRESHOLD_PARAM
+            ],
+        }
+        if any(field in params for field in RESOLUTION_THRESHOLD_FIELDS)
+        else {}
+    )
     trial_fold_dir.mkdir(parents=True, exist_ok=True)
     model_version = (
         f"{DEFAULT_FOLD_MODEL_VERSION_PREFIX}_optuna__{fold.name}__trial_{trial_number}"
@@ -631,7 +733,7 @@ def _run_trial_fold(
         train_sources,
         trial_fold_dir,
         model_version=model_version,
-        training_params=params,
+        training_params=training_params,
     )
     held_out_run = prepared_runs[fold.held_out_case]
     trial_run = _materialize_trial_case_run(
@@ -644,7 +746,7 @@ def _run_trial_fold(
         model_dir=trial_fold_dir,
         enable_shap=enable_shap,
     )
-    run_resolution(trial_run.data_dir, trial_run.run_id)
+    run_resolution(trial_run.data_dir, trial_run.run_id, **resolution_kwargs)
     evaluation_report = run_evaluation(
         trial_run.data_dir,
         trial_run.run_id,
@@ -659,6 +761,8 @@ def _run_trial_fold(
         training_metadata=training_result["training_metadata"],
         evaluation_report=evaluation_report,
     )
+    if resolution_kwargs:
+        row.update(resolution_thresholds)
     return row
 
 
@@ -704,7 +808,9 @@ def case_fold_objective(
     _validate_failed_trial_value(failed_trial_value)
     _validate_pairwise_beta(pairwise_beta)
     _validate_case_fold_study_inputs(folds, prepared_by_fold)
-    params = suggest_lightgbm_params(trial)
+    training_params = suggest_lightgbm_params(trial)
+    resolution_thresholds = suggest_resolution_thresholds(trial)
+    params = {**training_params, **resolution_thresholds}
     trial_dir = Path(output_root) / "trials" / f"trial_{trial.number:04d}"
     trial_dir.mkdir(parents=True, exist_ok=True)
 
@@ -712,17 +818,17 @@ def case_fold_objective(
     for fold in folds:
         prepared_runs = prepared_by_fold[fold.name]
         try:
-            rows.append(
-                fold_runner(
-                    fold,
-                    prepared_runs,
-                    trial_dir / fold.name,
-                    params,
-                    match_threshold,
-                    enable_shap,
-                    int(trial.number),
-                )
+            row = fold_runner(
+                fold,
+                prepared_runs,
+                trial_dir / fold.name,
+                params,
+                match_threshold,
+                enable_shap,
+                int(trial.number),
             )
+            row.update(resolution_thresholds)
+            rows.append(row)
         except Exception as exc:
             return _write_failed_trial_summary(
                 trial,
@@ -753,6 +859,7 @@ def case_fold_objective(
         "objective_beta": float(pairwise_beta),
         "objective_value": objective_value,
         "params": params,
+        "resolution_thresholds": resolution_thresholds,
         "fold_count": len(rows),
         "folds": rows,
     }
@@ -762,6 +869,7 @@ def case_fold_objective(
     trial.set_user_attr("fold_metrics", rows)
     trial.set_user_attr("objective_metric", CASE_FOLD_OBJECTIVE_METRIC)
     trial.set_user_attr("objective_beta", float(pairwise_beta))
+    trial.set_user_attr("resolution_thresholds", resolution_thresholds)
     return objective_value
 
 
@@ -771,6 +879,7 @@ def _write_best_params_artifact(
     best_value: float,
     best_trial_number: int,
     best_params: dict[str, Any],
+    best_resolution_thresholds: dict[str, float],
     n_trials_completed: int,
     fold_count: int,
     storage: str | None,
@@ -787,6 +896,7 @@ def _write_best_params_artifact(
         "best_trial_number": best_trial_number,
         "best_value": best_value,
         "best_params": best_params,
+        "best_resolution_thresholds": best_resolution_thresholds,
         "storage": storage,
         "study_name": study_name,
     }
@@ -842,6 +952,10 @@ def _trial_csv_rows(study: Any) -> list[dict[str, Any]]:
     """Flatten trial and fold metrics so every fold result stays inspectable."""
     rows: list[dict[str, Any]] = []
     for trial in sorted(study.trials, key=lambda item: int(item.number)):
+        resolution_thresholds = trial.user_attrs.get(
+            "resolution_thresholds",
+            _resolution_thresholds_from_trial_params(dict(trial.params)),
+        )
         base_row = {
             "trial_number": int(trial.number),
             "trial_state": _trial_state_name(trial),
@@ -853,6 +967,14 @@ def _trial_csv_rows(study: Any) -> list[dict[str, Any]]:
             ),
             "params_json": _trial_params_json(trial),
             "error": trial.user_attrs.get("case_fold_error", ""),
+            "keep_score_threshold": resolution_thresholds.get(
+                RESOLUTION_KEEP_THRESHOLD_PARAM,
+                "",
+            ),
+            "objective_neutral_threshold": resolution_thresholds.get(
+                RESOLUTION_NEUTRAL_THRESHOLD_PARAM,
+                "",
+            ),
         }
         fold_metrics = trial.user_attrs.get("fold_metrics") or []
         if not fold_metrics:
@@ -863,6 +985,10 @@ def _trial_csv_rows(study: Any) -> list[dict[str, Any]]:
                     "held_out_case": "",
                     "pairwise_f_beta": "",
                     "pairwise_beta": "",
+                    "keep_score_threshold": base_row["keep_score_threshold"],
+                    "objective_neutral_threshold": base_row[
+                        "objective_neutral_threshold"
+                    ],
                     "pairwise_precision": "",
                     "pairwise_recall": "",
                     "pairwise_f1": "",
@@ -888,6 +1014,14 @@ def _trial_csv_rows(study: Any) -> list[dict[str, Any]]:
                     "held_out_case": fold_row.get("held_out_case", ""),
                     "pairwise_f_beta": fold_row.get("pairwise_f_beta", ""),
                     "pairwise_beta": fold_row.get("pairwise_beta", ""),
+                    "keep_score_threshold": fold_row.get(
+                        "keep_score_threshold",
+                        base_row["keep_score_threshold"],
+                    ),
+                    "objective_neutral_threshold": fold_row.get(
+                        "objective_neutral_threshold",
+                        base_row["objective_neutral_threshold"],
+                    ),
                     "pairwise_precision": fold_row.get("pairwise_precision", ""),
                     "pairwise_recall": fold_row.get("pairwise_recall", ""),
                     "pairwise_f1": fold_row.get("pairwise_f1", ""),
@@ -929,6 +1063,8 @@ def write_fold_tuning_trials_csv(path: Path | str, study: Any) -> None:
         "held_out_case",
         "pairwise_f_beta",
         "pairwise_beta",
+        "keep_score_threshold",
+        "objective_neutral_threshold",
         "pairwise_precision",
         "pairwise_recall",
         "pairwise_f1",
@@ -978,7 +1114,16 @@ def write_fold_tuning_report_markdown(
     path.parent.mkdir(parents=True, exist_ok=True)
     best_rows = _best_trial_fold_rows(best_trial)
     best_trial_number = int(best_trial.number) if best_trial is not None else "None"
-    best_params = dict(best_trial.params) if best_trial is not None else {}
+    best_params = (
+        _training_params_from_trial_params(dict(best_trial.params))
+        if best_trial is not None
+        else {}
+    )
+    best_thresholds = (
+        _resolution_thresholds_from_trial_params(dict(best_trial.params))
+        if best_trial is not None
+        else {}
+    )
     guardrail_text = (
         f"Pairwise recall >= {_format_markdown_metric(min_pairwise_recall)} per fold"
         if min_pairwise_recall is not None
@@ -1008,6 +1153,18 @@ def write_fold_tuning_report_markdown(
                 ["Best value", _format_markdown_metric(summary["best_value"])],
                 ["Objective metric", summary["objective_metric"]],
                 ["Objective beta", _format_markdown_metric(summary["objective_beta"])],
+                [
+                    "Best keep threshold",
+                    _format_markdown_metric(
+                        best_thresholds.get(RESOLUTION_KEEP_THRESHOLD_PARAM, "None")
+                    ),
+                ],
+                [
+                    "Best neutral threshold",
+                    _format_markdown_metric(
+                        best_thresholds.get(RESOLUTION_NEUTRAL_THRESHOLD_PARAM, "None")
+                    ),
+                ],
                 ["Recall guardrail", guardrail_text],
             ],
         ),
@@ -1027,6 +1184,8 @@ def write_fold_tuning_report_markdown(
                     "Held-out case",
                     "Pairwise F-beta",
                     "Pairwise beta",
+                    "Keep threshold",
+                    "Neutral threshold",
                     "Pairwise P",
                     "Pairwise R",
                     "Pairwise F1",
@@ -1046,6 +1205,10 @@ def write_fold_tuning_report_markdown(
                         row.get("held_out_case", ""),
                         _format_markdown_metric(row.get("pairwise_f_beta", "")),
                         _format_markdown_metric(row.get("pairwise_beta", "")),
+                        _format_markdown_metric(row.get("keep_score_threshold", "")),
+                        _format_markdown_metric(
+                            row.get("objective_neutral_threshold", "")
+                        ),
                         _format_markdown_metric(row.get("pairwise_precision", "")),
                         _format_markdown_metric(row.get("pairwise_recall", "")),
                         _format_markdown_metric(row.get("pairwise_f1", "")),
@@ -1168,7 +1331,16 @@ def run_case_fold_optuna_study(
         else None
     )
     best_value = float(best_trial.value) if best_trial is not None else None
-    best_params = dict(best_trial.params) if best_trial is not None else {}
+    best_params = (
+        _training_params_from_trial_params(dict(best_trial.params))
+        if best_trial is not None
+        else {}
+    )
+    best_resolution_thresholds = (
+        _resolution_thresholds_from_trial_params(dict(best_trial.params))
+        if best_trial is not None
+        else {}
+    )
     artifact_name = None
     if best_trial is not None:
         artifact_name = _write_best_params_artifact(
@@ -1176,6 +1348,7 @@ def run_case_fold_optuna_study(
             best_value=best_value,
             best_trial_number=int(best_trial.number),
             best_params=best_params,
+            best_resolution_thresholds=best_resolution_thresholds,
             n_trials_completed=completed_trials,
             fold_count=len(folds),
             storage=storage,
@@ -1214,6 +1387,7 @@ def run_case_fold_optuna_study(
             "trusted_trial_count": len(trusted_trials),
             "successful_trial_count": len(trusted_trials),
             "best_params": best_params,
+            "best_resolution_thresholds": best_resolution_thresholds,
             "pairwise_beta": float(pairwise_beta),
             "min_pairwise_recall": min_pairwise_recall,
             "stale_best_params_artifact_removed": stale_artifact_removed,
