@@ -1,5 +1,5 @@
 pytest==9.0.2
-numpy==2.4.2
+numpy==1.26.4
 polars==1.38.1
 pyarrow==22.0.0
 duckdb==1.4.4
@@ -13,7 +13,6 @@ ftfy==6.3.1
 lightgbm==4.6.0
 scikit-learn==1.8.0
 optuna==4.7.0
-faiss-cpu>=1.7.4
+faiss-cpu==1.9.0
 datasketch>=1.6.0
 sentence-transformers>=2.2.0
-
