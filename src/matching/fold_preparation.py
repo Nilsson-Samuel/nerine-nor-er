@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 import shutil
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -191,10 +192,22 @@ def _feature_inputs_match(
     return all(actual.get(key) == expected.get(key) for key in keys)
 
 
+_SAFE_NAME_RE = re.compile(r"[A-Za-z0-9_\-]+")
+
+
+def _require_safe_name(name: str, kind: str) -> None:
+    """Reject names that would escape their intended output directory."""
+    if not _SAFE_NAME_RE.fullmatch(name):
+        raise ValueError(
+            f"{kind} name must contain only letters, digits, hyphens, and underscores: {name!r}"
+        )
+
+
 def _reject_duplicate_case_names(cases: dict[str, CaseFoldTuningCase]) -> None:
     """Keep reusable prepared run roots one-to-one with configured cases."""
     seen: dict[str, str] = {}
     for case_key, case in cases.items():
+        _require_safe_name(case.name, "case")
         previous_key = seen.get(case.name)
         if previous_key is not None:
             raise ValueError(
