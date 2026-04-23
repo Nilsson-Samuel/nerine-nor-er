@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+venv/
+.venv/
+
+# Data and models
+data/processed/
+data/raw/
+data/synthetic/
+data/runs/
+data/mock_handoff/
+models/*.lgb
+*.npy
+
+# IDE
+.vscode/
+.idea/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# HuggingFace cache
+.cache/huggingface/
+.cache/
+report.xml
+
+# OS
+.DS_Store
+*~
+*.swp
+*.kate-swp

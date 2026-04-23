@@ -1,0 +1,1 @@
+"""Synthetic stage test package."""
