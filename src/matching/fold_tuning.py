@@ -77,11 +77,12 @@ FOLD_TUNING_REPORT_FILENAME = "fold_tuning_report.md"
 CASE_FOLD_STUDY_SUMMARY_FILENAME = FOLD_TUNING_SUMMARY_FILENAME
 TRIAL_SUMMARY_FILENAME = "trial_summary.json"
 CASE_FOLD_OBJECTIVE_METRIC = "pairwise_f_beta"
-CASE_FOLD_OBJECTIVE_NAME = "macro_mean_held_out_case_pairwise_f_beta"
+CASE_FOLD_OBJECTIVE_NAME = "geomean_held_out_case_pairwise_f_beta"
+CASE_FOLD_FOLD_AGGREGATION = "geometric_mean"
 CASE_FOLD_FINGERPRINT_ATTR = "case_fold_fingerprint"
 CASE_FOLD_FINGERPRINT_HASH_ATTR = "case_fold_fingerprint_hash"
 CASE_FOLD_STUDY_FINGERPRINT_VERSION = 5
-CASE_FOLD_OBJECTIVE_VERSION = 3
+CASE_FOLD_OBJECTIVE_VERSION = 4
 CASE_FOLD_SEARCH_SPACE_VERSION = 2
 DEFAULT_FAILED_TRIAL_VALUE = -1.0
 DEFAULT_PAIRWISE_BETA = 0.5
@@ -598,6 +599,7 @@ def _write_failed_trial_summary(
         "objective_metric": CASE_FOLD_OBJECTIVE_METRIC,
         "objective": CASE_FOLD_OBJECTIVE_NAME,
         "objective_beta": float(pairwise_beta),
+        "fold_aggregation": CASE_FOLD_FOLD_AGGREGATION,
         "params": params,
         "resolution_thresholds": resolution_thresholds,
         "folds_completed": rows,
@@ -777,7 +779,13 @@ def _macro_objective(
     rows: list[dict[str, Any]],
     pairwise_beta: float = DEFAULT_PAIRWISE_BETA,
 ) -> float:
-    """Return macro-average pairwise F-beta or reject unusable fold metrics."""
+    """Aggregate fold pairwise F-beta with a geometric mean or reject bad rows."""
+    # Geometric mean punishes inconsistency across heterogeneous cases more than
+    # an arithmetic mean: by AM >= GM, a policy that does well on one case and
+    # poorly on another scores lower here than under a plain average, so Optuna
+    # cannot trade a strong case for a weak one. A single zero-valued fold
+    # collapses the whole objective, matching the deployment risk where one
+    # unusable fold disqualifies the trial entirely.
     _validate_pairwise_beta(pairwise_beta)
     if not rows:
         raise ValueError("case-fold objective requires at least one completed fold")
@@ -796,7 +804,9 @@ def _macro_objective(
         row[CASE_FOLD_OBJECTIVE_METRIC] = value
         row["pairwise_beta"] = float(pairwise_beta)
         values.append(float(value))
-    return sum(values) / len(values)
+    if any(value <= 0.0 for value in values):
+        return 0.0
+    return math.prod(values) ** (1.0 / len(values))
 
 
 def case_fold_objective(
@@ -870,6 +880,7 @@ def case_fold_objective(
         "objective_metric": CASE_FOLD_OBJECTIVE_METRIC,
         "objective": CASE_FOLD_OBJECTIVE_NAME,
         "objective_beta": float(pairwise_beta),
+        "fold_aggregation": CASE_FOLD_FOLD_AGGREGATION,
         "objective_value": objective_value,
         "params": params,
         "resolution_thresholds": resolution_thresholds,
@@ -882,6 +893,7 @@ def case_fold_objective(
     trial.set_user_attr("fold_metrics", rows)
     trial.set_user_attr("objective_metric", CASE_FOLD_OBJECTIVE_METRIC)
     trial.set_user_attr("objective_beta", float(pairwise_beta))
+    trial.set_user_attr("fold_aggregation", CASE_FOLD_FOLD_AGGREGATION)
     trial.set_user_attr("resolution_thresholds", resolution_thresholds)
     return objective_value
 
@@ -904,6 +916,7 @@ def _write_best_params_artifact(
         "metric": CASE_FOLD_OBJECTIVE_METRIC,
         "objective": CASE_FOLD_OBJECTIVE_NAME,
         "objective_beta": float(pairwise_beta),
+        "fold_aggregation": CASE_FOLD_FOLD_AGGREGATION,
         "n_trials_completed": n_trials_completed,
         "fold_count": fold_count,
         "best_trial_number": best_trial_number,
@@ -1393,6 +1406,7 @@ def run_case_fold_optuna_study(
         {
             "objective_metric": CASE_FOLD_OBJECTIVE_METRIC,
             "objective_beta": float(pairwise_beta),
+            "fold_aggregation": CASE_FOLD_FOLD_AGGREGATION,
             "tuning_scope": "case_fold",
             "fold_count": len(folds),
             "study_name": study.study_name,

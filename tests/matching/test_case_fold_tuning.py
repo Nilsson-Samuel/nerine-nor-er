@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import json
+import math
 import os
 import subprocess
 import sys
@@ -26,6 +27,7 @@ from src.matching.fold_tuning import (
     CASE_FOLD_BEST_PARAMS_FILENAME,
     CASE_FOLD_FINGERPRINT_ATTR,
     CASE_FOLD_FINGERPRINT_HASH_ATTR,
+    CASE_FOLD_FOLD_AGGREGATION,
     CASE_FOLD_OBJECTIVE_METRIC,
     DEFAULT_PAIRWISE_BETA,
     DEFAULT_FAILED_TRIAL_VALUE,
@@ -756,7 +758,9 @@ def test_repeated_trial_folds_keep_outputs_out_of_prepared_case_run(
     ).exists()
 
 
-def test_case_fold_objective_macro_averages_fake_fold_results(tmp_path: Path) -> None:
+def test_case_fold_objective_geomean_aggregates_fake_fold_results(
+    tmp_path: Path,
+) -> None:
     folds = [
         CaseFoldTuningFold("fold_a", "case_a", ["case_b"]),
         CaseFoldTuningFold("fold_b", "case_b", ["case_a"]),
@@ -788,12 +792,14 @@ def test_case_fold_objective_macro_averages_fake_fold_results(tmp_path: Path) ->
         )
     )
 
-    assert value == 0.6000000000000001
+    assert value == pytest.approx(math.sqrt(0.4 * 0.8))
     assert summary["status"] == "completed"
     assert summary["objective_metric"] == CASE_FOLD_OBJECTIVE_METRIC
     assert summary["objective_beta"] == DEFAULT_PAIRWISE_BETA
+    assert summary["fold_aggregation"] == CASE_FOLD_FOLD_AGGREGATION
     assert summary["fold_count"] == 2
     assert trial.user_attrs["case_fold_status"] == "completed"
+    assert trial.user_attrs["fold_aggregation"] == CASE_FOLD_FOLD_AGGREGATION
 
 
 def test_case_fold_objective_removes_trial_fold_artifacts_by_default(
@@ -926,6 +932,46 @@ def test_macro_objective_supports_non_default_pairwise_beta() -> None:
     assert value == pytest.approx(0.32)
     assert row[CASE_FOLD_OBJECTIVE_METRIC] == pytest.approx(0.32)
     assert row["pairwise_beta"] == 1.0
+
+
+def test_macro_objective_geometric_mean_equal_folds_returns_same_value() -> None:
+    # Equality case of the AM-GM inequality: when every fold has the same score,
+    # the geometric mean equals that score. Protects against regressions that
+    # would drift the aggregate even for homogeneous folds.
+    row_a = _fold_row("fold_a", 0.9)
+    row_a.update({"pairwise_precision": 0.6, "pairwise_recall": 0.6})
+    row_b = _fold_row("fold_b", 0.9)
+    row_b.update({"pairwise_precision": 0.6, "pairwise_recall": 0.6})
+
+    value = _macro_objective([row_a, row_b], pairwise_beta=1.0)
+
+    assert value == pytest.approx(0.6)
+
+
+def test_macro_objective_geometric_mean_two_folds_matches_sqrt_product() -> None:
+    # Plan-specified sanity case: folds at 0.8 and 0.5 must aggregate to
+    # sqrt(0.4), which is strictly less than their arithmetic mean of 0.65.
+    row_a = _fold_row("fold_a", 0.9)
+    row_a.update({"pairwise_precision": 0.8, "pairwise_recall": 0.8})
+    row_b = _fold_row("fold_b", 0.9)
+    row_b.update({"pairwise_precision": 0.5, "pairwise_recall": 0.5})
+
+    value = _macro_objective([row_a, row_b], pairwise_beta=1.0)
+
+    assert value == pytest.approx(math.sqrt(0.4))
+
+
+def test_macro_objective_zero_fold_collapses_aggregate_to_zero() -> None:
+    # A catastrophic fold must collapse the aggregate to 0 so Optuna cannot
+    # trade an unusable held-out case against strong ones.
+    row_good = _fold_row("fold_a", 0.9)
+    row_good.update({"pairwise_precision": 0.9, "pairwise_recall": 0.9})
+    row_zero = _fold_row("fold_b", 0.0)
+    row_zero.update({"pairwise_precision": 0.0, "pairwise_recall": 0.0})
+
+    value = _macro_objective([row_good, row_zero])
+
+    assert value == 0.0
 
 
 def test_case_fold_objective_rejects_non_negative_failed_trial_value(
@@ -1300,8 +1346,9 @@ def test_case_fold_study_writes_best_params_and_uses_persistent_storage(
     assert summary["objective_metric"] == CASE_FOLD_OBJECTIVE_METRIC
     assert summary["objective_beta"] == DEFAULT_PAIRWISE_BETA
     assert artifact["metric"] == CASE_FOLD_OBJECTIVE_METRIC
-    assert artifact["objective"] == "macro_mean_held_out_case_pairwise_f_beta"
+    assert artifact["objective"] == "geomean_held_out_case_pairwise_f_beta"
     assert artifact["objective_beta"] == DEFAULT_PAIRWISE_BETA
+    assert artifact["fold_aggregation"] == CASE_FOLD_FOLD_AGGREGATION
     assert artifact["fold_count"] == 2
     assert artifact["n_trials_completed"] == 2
     assert set(artifact["best_resolution_thresholds"]) == {
@@ -1685,6 +1732,59 @@ def test_case_fold_study_rejects_changed_case_inputs_for_same_folds(
                 folds,
                 identity_tag="changed",
             ),
+            fold_runner=fake_runner,
+        )
+
+
+def test_case_fold_study_rejects_persistent_study_with_bumped_objective_version(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    # Simulate a persistent study created under the old arithmetic-mean
+    # aggregation by writing it with a lower objective version, then resuming
+    # under the current (geometric-mean) objective version. Fingerprint
+    # rejection is what prevents the two aggregations from mixing trials.
+    folds = [CaseFoldTuningFold("fold_a", "case_a", ["case_b"])]
+    storage = f"sqlite:///{tmp_path / 'optuna.db'}"
+    prepared = _prepared_by_fold_stub(tmp_path, folds)
+
+    def fake_runner(
+        fold: CaseFoldTuningFold,
+        _prepared_runs: dict,
+        _trial_fold_dir: Path,
+        _params: dict,
+        _match_threshold: float,
+        _enable_shap: bool,
+        _trial_number: int,
+    ) -> dict[str, Any]:
+        return _fold_row(fold.name, 0.4)
+
+    monkeypatch.setattr(
+        fold_tuning,
+        "CASE_FOLD_OBJECTIVE_VERSION",
+        fold_tuning.CASE_FOLD_OBJECTIVE_VERSION - 1,
+    )
+    run_case_fold_optuna_study(
+        cases={},
+        folds=folds,
+        output_root=tmp_path,
+        n_trials=1,
+        storage=storage,
+        study_name="case_fold_demo",
+        prepared_by_fold=prepared,
+        fold_runner=fake_runner,
+    )
+    monkeypatch.undo()
+
+    with pytest.raises(ValueError, match="fingerprint"):
+        run_case_fold_optuna_study(
+            cases={},
+            folds=folds,
+            output_root=tmp_path,
+            n_trials=1,
+            storage=storage,
+            study_name="case_fold_demo",
+            prepared_by_fold=prepared,
             fold_runner=fake_runner,
         )
 
