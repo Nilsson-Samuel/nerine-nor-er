@@ -29,6 +29,7 @@ from src.matching.fold_preparation import (
     CaseFoldTuningCase,
     CaseFoldTuningFold,
     PreparedCaseRun,
+    _require_safe_name,
     load_prepared_case_manifest,
     prepare_case_fold_artifacts,
     required_prepared_feature_artifact_paths,
@@ -512,6 +513,7 @@ def _validate_case_fold_study_inputs(
     for fold in folds:
         if not fold.name:
             raise ValueError("case-fold tuning requires named folds")
+        _require_safe_name(fold.name, "fold")
         if fold.name in seen_fold_names:
             raise ValueError(f"duplicate fold name: {fold.name}")
         seen_fold_names.add(fold.name)
