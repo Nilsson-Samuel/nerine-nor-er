@@ -89,7 +89,7 @@ thresholds before a final evaluation run.
 |---|---|
 | `scripts/run_case_fold_eval.py` | Main case-fold evaluator. Use this when several reviewed case folders exist and held-out metrics are needed. |
 | `scripts/run_case_fold_tuning.py` | CLI wrapper for case-fold Optuna tuning. Use before final evaluation if tuning LightGBM parameters or resolution thresholds. |
-| `src/matching/fold_tuning.py` | Implements the Optuna objective: train fold model, score held-out case, run resolution with trial thresholds, evaluate, then macro-average held-out pairwise F-beta. |
+| `src/matching/fold_tuning.py` | Implements the Optuna objective: train fold model, score held-out case, run resolution with trial thresholds, evaluate, then combine held-out pairwise F-beta across folds with a geometric mean. |
 | `src/matching/fold_preparation.py` | Prepares reusable per-case artifacts for tuning: ingestion, extraction, blocking, matching features, and gold-derived labels. |
 | `src/matching/fold_training.py` | Loads labeled rows from train cases, trains a fold-specific LightGBM model, and writes fold summaries. |
 | `src/evaluation/run.py` | Converts reviewed gold CSV rows into labels and computes extraction, blocking, matching, and final clustering metrics. |
@@ -334,6 +334,30 @@ mentions creates three pairs; a cluster with two mentions creates one pair.
 Precision measures how many predicted same-cluster pairs are correct. Recall
 measures how many reviewed same-entity pairs were recovered.
 
+### Future Work: Weighted Optuna Target
+
+A possible refinement is to extend the per-fold objective from pairwise F0.5
+alone to a weighted composite:
+
+    T = GeoMean_over_folds[ 0.5 * pairwise_F0.5 + 0.5 * ELM_F0.5 ]
+
+ELM is a B-cubed-style element-centric score that does not count a mention's
+match with itself. Singletons and tiny-cluster mentions, which are trivially
+easy for entity resolution, no longer inflate the score. This forces the tuner
+to do well on both large hub clusters (captured by pairwise, which is
+quadratic in cluster size) and the long tail of small clusters (captured by
+ELM, which is linear in cluster size).
+
+Equal 0.5 / 0.5 weighting is the intended default. Pairwise already encodes
+"hubs matter more" through its quadratic scaling; weighting pairwise higher
+externally would double-count that preference. ELM is meant to act as a
+binding counter-signal, not a supplementary hub signal.
+
+This refinement is out of scope for the current implementation but is a
+reasonable next step for datasets with many tiny clusters, or when tuning
+produces a model that looks pairwise-strong but B-cubed-weak.
+
+
 ### Tuning Workflow And Search Space
 
 Run tuning before the final held-out evaluation if model parameters or
@@ -430,6 +454,16 @@ Persistent studies are guarded by an input fingerprint in `src/matching/fold_tun
 If case inputs, folds, objective settings, resolution-threshold search space, or
 search-space version differ, the same persistent study is rejected instead of
 silently mixing incompatible runs.
+
+### Optuna Dashboard
+
+Install once: `python -m pip install optuna-dashboard`.
+
+Open any saved tuning study with:
+`optuna-dashboard sqlite:///data/<tuning-run-dir>/optuna.db`
+
+Then visit `http://127.0.0.1:8080/`. Use `fold_tuning_report.md` for trusted-trial interpretation.
+
 
 ## Single-Run Evaluation
 

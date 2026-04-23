@@ -95,17 +95,26 @@ documentation/     Evaluation, HITL, annotation, and run guides
 
 The repository includes tooling for held-out case evaluation against reviewed gold annotations. The current evaluation setup tests complete cases as held-out folds instead of only reporting training or synthetic metrics.
 
-In the current four-fold reviewed-case tuning run, the best Optuna trial used 120 completed trials and reached macro held-out pairwise F0.5 of `0.955` across four held-out cases, with macro pairwise precision about `0.980` and recall about `0.874`. These numbers are promising for the current reviewed cases and evidence that the workflow functions end to end, but should be treated as directional because the reviewed dataset is still small.
+In the small tuning run on four small cases, Optuna completed 120 objective trials. The best trusted trial got a macro held-out pairwise F0.5 of `0.967` across three reviewed tuning folds. 
 
-A further evaluation on restricted partner-held material is planned in near future. That data cannot be included in this repository.
+The winning trial reached pairwise F0.5 scores of `0.950`, `0.987`, and `0.964` on the three held-out tuning cases. A separate final hold-out test on `styles_case_manual` reached pairwise F0.5 of `0.894`, with pairwise precision `0.894` and recall `0.894`. These results show that the workflow functions end to end and generalizes beyond the tuning folds, but should still be treated as directional because the reviewed dataset remains small.
+
+Further evaluation on restricted partner-held material is planned in near future. That data cannot be included in this repository.
+
 
 ## Documentation
 
 More detailed project notes and run guides are available in `documentation/`:
 
 - `README-evaluation.md` for evaluation, case-fold runs, Optuna tuning, and metric interpretation
-- `case-fold-runner-real-cases.md` for local case-fold runner usage and reviewed-case notes
+- `README-hitl.md` for running and troubleshooting the human-in-the-loop Streamlit review app. 
 - `README-annotation-tooling.md` for annotation workflow. 
+
+## License
+
+The source code in this repository is licensed under the MIT License. See `LICENSE` for details.
+
+Data, generated artifacts, and partner-held or restricted evaluation material are not covered by this code license unless explicitly stated otherwise.
 
 ## Engineering Scope
 
