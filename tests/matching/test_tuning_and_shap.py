@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import polars as pl
@@ -12,9 +13,18 @@ import pyarrow.parquet as pq
 import pytest
 
 from src.matching.run import run_features, run_scoring
-from src.matching.reranker import save_lightgbm_artifacts, train_lightgbm
+from src.matching.reranker import (
+    BASELINE_LIGHTGBM_PARAMS,
+    save_lightgbm_artifacts,
+    train_lightgbm,
+)
 from src.matching.shap_explain import format_shap_top5
-from src.matching.tuning import BEST_PARAMS_FILENAME, run_optuna_study, split_labeled_feature_matrix
+from src.matching.tuning import (
+    BEST_PARAMS_FILENAME,
+    run_optuna_study,
+    split_labeled_feature_matrix,
+    suggest_lightgbm_params,
+)
 from src.matching.writer import (
     get_matching_run_output_dir,
     get_scoring_metadata_path,
@@ -105,6 +115,60 @@ def _assert_shap_contract(row: list[dict]) -> None:
     assert all(isinstance(feature, str) and feature for feature in features)
     assert all(np.isfinite(value) for value in values)
     assert [abs(value) for value in values] == sorted((abs(value) for value in values), reverse=True)
+
+
+class RecordingTrial:
+    """Optuna-like trial that records the declared search space."""
+
+    def __init__(self) -> None:
+        self.float_ranges: dict[str, tuple[float, float, bool]] = {}
+        self.int_ranges: dict[str, tuple[int, int, int | None]] = {}
+
+    def suggest_float(self, name: str, low: float, high: float, **kwargs: Any) -> float:
+        self.float_ranges[name] = (low, high, bool(kwargs.get("log", False)))
+        return low
+
+    def suggest_int(self, name: str, low: int, high: int, **kwargs: Any) -> int:
+        self.int_ranges[name] = (low, high, kwargs.get("step"))
+        return low
+
+
+def test_suggest_lightgbm_params_covers_baseline_search_space() -> None:
+    trial = RecordingTrial()
+    params = suggest_lightgbm_params(trial)
+
+    assert set(params) == {
+        "learning_rate",
+        "n_estimators",
+        "num_leaves",
+        "min_child_samples",
+        "reg_lambda",
+        "subsample",
+        "colsample_bytree",
+    }
+    assert trial.float_ranges == {
+        "learning_rate": (0.02, 0.10, True),
+        "reg_lambda": (0.5, 20.0, True),
+        "subsample": (0.7, 1.0, False),
+        "colsample_bytree": (0.7, 1.0, False),
+    }
+    assert trial.int_ranges == {
+        "n_estimators": (100, 400, 20),
+        "num_leaves": (15, 63, None),
+        "min_child_samples": (10, 100, None),
+    }
+
+    for name, (low, high, log) in trial.float_ranges.items():
+        baseline_value = BASELINE_LIGHTGBM_PARAMS[name]
+        assert low <= baseline_value <= high
+        if name in {"learning_rate", "reg_lambda"}:
+            assert log is True
+
+    for name, (low, high, step) in trial.int_ranges.items():
+        baseline_value = BASELINE_LIGHTGBM_PARAMS[name]
+        assert low <= baseline_value <= high
+        if step is not None:
+            assert (baseline_value - low) % step == 0
 
 
 def test_format_shap_top5_orders_by_absolute_value_and_limits_to_five() -> None:

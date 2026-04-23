@@ -31,21 +31,25 @@ FINAL_CLUSTERING_METRIC_FIELDS = (
     "pairwise_precision",
     "pairwise_recall",
     "pairwise_f1",
+    "pairwise_f0_5",
     "ari",
     "nmi",
     "bcubed_precision",
     "bcubed_recall",
     "bcubed_f1",
+    "bcubed_f0_5",
 )
 FINAL_CLUSTERING_METRIC_LABELS = {
     "pairwise_precision": "Pairwise precision",
     "pairwise_recall": "Pairwise recall",
     "pairwise_f1": "Pairwise F1",
+    "pairwise_f0_5": "Pairwise F0.5",
     "ari": "ARI",
     "nmi": "NMI",
     "bcubed_precision": "B-cubed precision",
     "bcubed_recall": "B-cubed recall",
     "bcubed_f1": "B-cubed F1",
+    "bcubed_f0_5": "B-cubed F0.5",
 }
 
 
@@ -69,11 +73,7 @@ class FoldTrainingMatrix:
 
 def _raise_if_duplicate_pair_keys(frame: pl.DataFrame, source_name: str) -> None:
     """Reject duplicate pair keys before joining labels onto features."""
-    duplicate_keys = (
-        frame.group_by(PAIR_KEY_COLUMNS)
-        .len()
-        .filter(pl.col("len") > 1)
-    )
+    duplicate_keys = frame.group_by(PAIR_KEY_COLUMNS).len().filter(pl.col("len") > 1)
     if duplicate_keys.height:
         raise ValueError(f"{source_name} contains duplicate pair keys")
 
@@ -206,6 +206,28 @@ def train_and_save_fold_model(
     }
 
 
+def _resolution_diagnostic_fields(evaluation_report: dict[str, Any]) -> dict[str, Any]:
+    """Extract retained-graph diagnostics when evaluation recorded them."""
+    resolution = evaluation_report.get("stage_metrics", {}).get("resolution", {})
+    if not resolution:
+        return {}
+
+    thresholds = resolution.get("thresholds", {})
+    fields = {
+        "keep_score_threshold": thresholds.get("keep_score_threshold"),
+        "objective_neutral_threshold": thresholds.get("objective_neutral_threshold"),
+        "retained_edge_count": resolution.get("retained_edge_count"),
+        "component_count": resolution.get("component_count"),
+        "non_trivial_component_count": resolution.get("non_trivial_component_count"),
+        "largest_component_size": resolution.get("largest_component_size"),
+        "cluster_count": resolution.get("cluster_count"),
+        "merged_edges_above_neutral_threshold": resolution.get(
+            "merged_edges_above_neutral_threshold"
+        ),
+    }
+    return {key: value for key, value in fields.items() if value is not None}
+
+
 def build_fold_summary_row(
     *,
     fold_name: str,
@@ -224,7 +246,7 @@ def build_fold_summary_row(
     if blocking_recall is None:
         blocking_recall = blocking["positive_pair_recall"]
 
-    return {
+    row = {
         "fold_name": fold_name,
         "held_out_case": held_out_case,
         "train_cases": list(train_cases),
@@ -233,20 +255,26 @@ def build_fold_summary_row(
         "train_labeled_row_count": int(training_metadata["labeled_row_count"]),
         "train_positive_rate": float(training_metadata["positive_rate"]),
         "evaluation_entity_count": int(metric_scope["evaluation_entity_count"]),
-        "evaluation_candidate_pair_count": int(metric_scope["evaluation_candidate_pair_count"]),
+        "evaluation_candidate_pair_count": int(
+            metric_scope["evaluation_candidate_pair_count"]
+        ),
         "pairwise_precision": float(metrics["pairwise_precision"]),
         "pairwise_recall": float(metrics["pairwise_recall"]),
         "pairwise_f1": float(metrics["pairwise_f1"]),
+        "pairwise_f0_5": float(metrics["pairwise_f0_5"]),
         "ari": float(metrics["ari"]),
         "nmi": float(metrics["nmi"]),
         "bcubed_precision": float(metrics["bcubed_precision"]),
         "bcubed_recall": float(metrics["bcubed_recall"]),
         "bcubed_f1": float(metrics["bcubed_f1"]),
+        "bcubed_f0_5": float(metrics["bcubed_f0_5"]),
         "blocking_positive_pair_recall": float(blocking_recall),
         "matching_pairwise_precision": float(matching["precision"]),
         "matching_pairwise_recall": float(matching["recall"]),
         "matching_pairwise_f1": float(matching["f1"]),
     }
+    row.update(_resolution_diagnostic_fields(evaluation_report))
+    return row
 
 
 def build_macro_average_row(rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -326,7 +354,10 @@ def write_fold_summary_markdown(path: Path | str, payload: dict[str, Any]) -> No
         _markdown_table(
             ["Metric", "Value"],
             [
-                [FINAL_CLUSTERING_METRIC_LABELS[name], _format_markdown_metric(summary_row[name])]
+                [
+                    FINAL_CLUSTERING_METRIC_LABELS[name],
+                    _format_markdown_metric(summary_row[name]),
+                ]
                 for name in FINAL_CLUSTERING_METRIC_FIELDS
             ],
         ),
@@ -336,9 +367,31 @@ def write_fold_summary_markdown(path: Path | str, payload: dict[str, Any]) -> No
         _markdown_table(
             ["Signal", "Value"],
             [
+                *(
+                    [
+                        [
+                            "Resolution keep threshold",
+                            _format_markdown_metric(
+                                summary_row["keep_score_threshold"]
+                            ),
+                        ],
+                        [
+                            "Resolution neutral threshold",
+                            _format_markdown_metric(
+                                summary_row["objective_neutral_threshold"]
+                            ),
+                        ],
+                        ["Retained edges", summary_row["retained_edge_count"]],
+                        ["Retained components", summary_row["component_count"]],
+                    ]
+                    if "keep_score_threshold" in summary_row
+                    else []
+                ),
                 [
                     "Blocking gold-positive-pair recall",
-                    _format_markdown_metric(summary_row["blocking_positive_pair_recall"]),
+                    _format_markdown_metric(
+                        summary_row["blocking_positive_pair_recall"]
+                    ),
                 ],
                 [
                     "Matching pairwise precision",
@@ -390,6 +443,21 @@ def write_aggregate_fold_reports_markdown(
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     macro_row = build_macro_average_row(rows)
+    include_resolution_thresholds = all("keep_score_threshold" in row for row in rows)
+    threshold_headers = (
+        ["Keep threshold", "Neutral threshold"] if include_resolution_thresholds else []
+    )
+    threshold_cells_by_row = [
+        (
+            [
+                _format_markdown_metric(row["keep_score_threshold"]),
+                _format_markdown_metric(row["objective_neutral_threshold"]),
+            ]
+            if include_resolution_thresholds
+            else []
+        )
+        for row in rows
+    ]
     lines = [
         "# Case-Fold Evaluation Overview",
         "",
@@ -399,14 +467,17 @@ def write_aggregate_fold_reports_markdown(
             [
                 "Fold",
                 "Held-out case",
+                *threshold_headers,
                 "Pairwise P",
                 "Pairwise R",
                 "Pairwise F1",
+                "Pairwise F0.5",
                 "ARI",
                 "NMI",
                 "B-cubed P",
                 "B-cubed R",
                 "B-cubed F1",
+                "B-cubed F0.5",
                 "Blocking recall",
                 "Matching P",
                 "Matching R",
@@ -416,33 +487,39 @@ def write_aggregate_fold_reports_markdown(
                 [
                     row["fold_name"],
                     row["held_out_case"],
+                    *threshold_cells,
                     _format_markdown_metric(row["pairwise_precision"]),
                     _format_markdown_metric(row["pairwise_recall"]),
                     _format_markdown_metric(row["pairwise_f1"]),
+                    _format_markdown_metric(row["pairwise_f0_5"]),
                     _format_markdown_metric(row["ari"]),
                     _format_markdown_metric(row["nmi"]),
                     _format_markdown_metric(row["bcubed_precision"]),
                     _format_markdown_metric(row["bcubed_recall"]),
                     _format_markdown_metric(row["bcubed_f1"]),
+                    _format_markdown_metric(row["bcubed_f0_5"]),
                     _format_markdown_metric(row["blocking_positive_pair_recall"]),
                     _format_markdown_metric(row["matching_pairwise_precision"]),
                     _format_markdown_metric(row["matching_pairwise_recall"]),
                     _format_markdown_metric(row["matching_pairwise_f1"]),
                 ]
-                for row in rows
+                for row, threshold_cells in zip(rows, threshold_cells_by_row)
             ]
             + [
                 [
                     macro_row["fold_name"],
                     macro_row["held_out_case"],
+                    *(["-", "-"] if include_resolution_thresholds else []),
                     _format_markdown_metric(macro_row["pairwise_precision"]),
                     _format_markdown_metric(macro_row["pairwise_recall"]),
                     _format_markdown_metric(macro_row["pairwise_f1"]),
+                    _format_markdown_metric(macro_row["pairwise_f0_5"]),
                     _format_markdown_metric(macro_row["ari"]),
                     _format_markdown_metric(macro_row["nmi"]),
                     _format_markdown_metric(macro_row["bcubed_precision"]),
                     _format_markdown_metric(macro_row["bcubed_recall"]),
                     _format_markdown_metric(macro_row["bcubed_f1"]),
+                    _format_markdown_metric(macro_row["bcubed_f0_5"]),
                     "-",
                     "-",
                     "-",

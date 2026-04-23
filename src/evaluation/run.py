@@ -37,7 +37,10 @@ from src.shared.paths import (
     get_extraction_run_output_dir,
     get_ingestion_run_output_dir,
 )
-from src.resolution.writer import get_resolved_entities_output_path
+from src.resolution.writer import (
+    get_resolution_diagnostics_path,
+    get_resolved_entities_output_path,
+)
 from src.shared import schemas
 from src.shared.config import PAIR_MATCH_THRESHOLD
 from src.synthetic.build_matching_dataset import LABELS_SCHEMA
@@ -45,7 +48,9 @@ from src.synthetic.build_matching_dataset import LABELS_SCHEMA
 DEFAULT_MATCH_THRESHOLD = PAIR_MATCH_THRESHOLD
 DEFAULT_ALLOWED_METRIC_DROP = {
     "pairwise_f1": 0.03,
+    "pairwise_f0_5": 0.03,
     "bcubed_f1": 0.03,
+    "bcubed_f0_5": 0.03,
     "ari": 0.05,
     "nmi": 0.05,
 }
@@ -89,6 +94,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="Optional doc_id allowlist for labels written to --shared-labels-path.",
     )
     return parser.parse_args(argv)
+
 
 def _prepare_gold_label_bridge(
     data_dir: Path,
@@ -193,6 +199,8 @@ def write_training_labels_from_gold(
         "candidate_pair_count": int(bridge["candidate_pairs"].height),
         "bridge_summary": dict(bridge["bridge_summary"]),
     }
+
+
 def run_evaluation(
     data_dir: Path | str,
     run_id: str,
@@ -221,6 +229,7 @@ def run_evaluation(
     candidate_pairs = bridge["candidate_pairs"]
     scored_pairs = _load_scored_pairs(data_dir, run_id)
     resolved_entities = _load_resolved_entities(data_dir, run_id)
+    resolution_diagnostics = _load_resolution_diagnostics(data_dir, run_id)
     predicted_mentions = bridge["predicted_mentions"]
     gold_group_by_entity = bridge["gold_group_by_entity"]
     bridge_summary = dict(bridge["bridge_summary"])
@@ -338,7 +347,8 @@ def run_evaluation(
                 "entities_with_ambiguous_gold_groups"
             ],
             "evaluation_candidate_pair_count": labels_table.num_rows,
-            "excluded_candidate_pair_count": candidate_pairs.height - labels_table.num_rows,
+            "excluded_candidate_pair_count": candidate_pairs.height
+            - labels_table.num_rows,
         },
         "metrics": resolution_scores,
         "stage_metrics": {
@@ -348,6 +358,7 @@ def run_evaluation(
                 "score_threshold": match_threshold,
                 **matching_scores,
             },
+            "resolution": resolution_diagnostics,
         },
         "error_analysis": {
             "extraction": summarize_extraction_errors(
@@ -387,7 +398,9 @@ def build_regression_checks(
             {"check": f"{label}_exists", "passed": path.exists(), "details": str(path)}
         )
 
-    evaluation_entity_count = int((metric_scope or {}).get("evaluation_entity_count", 0))
+    evaluation_entity_count = int(
+        (metric_scope or {}).get("evaluation_entity_count", 0)
+    )
     evaluation_candidate_pair_count = int(
         (metric_scope or {}).get("evaluation_candidate_pair_count", 0)
     )
@@ -406,7 +419,14 @@ def build_regression_checks(
         }
     )
 
-    required_metrics = ("pairwise_f1", "bcubed_f1", "ari", "nmi")
+    required_metrics = (
+        "pairwise_f1",
+        "pairwise_f0_5",
+        "bcubed_f1",
+        "bcubed_f0_5",
+        "ari",
+        "nmi",
+    )
     for metric_name in required_metrics:
         value = metrics.get(metric_name)
         passed = isinstance(value, (int, float)) and math.isfinite(float(value))
@@ -463,6 +483,39 @@ def _finite_metric_value(value: Any) -> float | None:
     if not math.isfinite(numeric):
         return None
     return numeric
+
+
+def _load_resolution_diagnostics(data_dir: Path, run_id: str) -> dict[str, Any]:
+    """Load retained-graph diagnostics for the final evaluation report."""
+    diagnostics_path = get_resolution_diagnostics_path(data_dir, run_id)
+    if not diagnostics_path.exists():
+        return {}
+
+    payload = json.loads(diagnostics_path.read_text(encoding="utf-8"))
+    thresholds = payload.get("thresholds", {})
+    return {
+        "thresholds": {
+            "keep_score_threshold": thresholds.get("keep_score_threshold"),
+            "objective_neutral_threshold": thresholds.get(
+                "objective_neutral_threshold"
+            ),
+            "review_confidence_threshold": thresholds.get(
+                "review_confidence_threshold"
+            ),
+        },
+        "retained_edge_count": payload.get("retained_edge_count"),
+        "component_count": payload.get("component_count"),
+        "non_trivial_component_count": payload.get("non_trivial_component_count"),
+        "singleton_node_count": payload.get("singleton_node_count"),
+        "singleton_rate": payload.get("singleton_rate"),
+        "largest_component_size": payload.get("largest_component_size"),
+        "cluster_count": payload.get("cluster_count"),
+        "cluster_singleton_rate": payload.get("cluster_singleton_rate"),
+        "merged_edges_above_neutral_threshold": payload.get(
+            "merged_edges_above_neutral_threshold"
+        ),
+        "giant_component_warnings": payload.get("giant_component_warnings", []),
+    }
 
 
 def _load_gold_mentions(gold_path: Path) -> pl.DataFrame:
@@ -525,7 +578,9 @@ def _load_gold_mentions(gold_path: Path) -> pl.DataFrame:
 
 def _load_docs(data_dir: Path, run_id: str) -> pl.DataFrame:
     """Load and validate docs metadata for one run."""
-    table = pq.read_table(get_ingestion_run_output_dir(data_dir, run_id) / "docs.parquet")
+    table = pq.read_table(
+        get_ingestion_run_output_dir(data_dir, run_id) / "docs.parquet"
+    )
     errors = schemas.validate_contract_rules(table, "docs")
     if errors:
         raise ValueError(f"docs failed contract validation: {errors}")
@@ -570,7 +625,9 @@ def _remap_gold_doc_ids(
 
 def _load_chunks(data_dir: Path, run_id: str) -> pl.DataFrame:
     """Load and validate chunks for one run."""
-    table = pq.read_table(get_ingestion_run_output_dir(data_dir, run_id) / "chunks.parquet")
+    table = pq.read_table(
+        get_ingestion_run_output_dir(data_dir, run_id) / "chunks.parquet"
+    )
     errors = schemas.validate_contract_rules(table, "chunks")
     if errors:
         raise ValueError(f"chunks failed contract validation: {errors}")
@@ -672,7 +729,9 @@ def _remap_gold_offsets_to_run_text(
 
 def _load_entities(data_dir: Path, run_id: str) -> pl.DataFrame:
     """Load and validate entities for one run."""
-    table = pq.read_table(get_extraction_run_output_dir(data_dir, run_id) / "entities.parquet")
+    table = pq.read_table(
+        get_extraction_run_output_dir(data_dir, run_id) / "entities.parquet"
+    )
     errors = schemas.validate_contract_rules(table, "entities")
     if errors:
         raise ValueError(f"entities failed contract validation: {errors}")
@@ -684,7 +743,9 @@ def _load_entities(data_dir: Path, run_id: str) -> pl.DataFrame:
 
 def _load_candidate_pairs(data_dir: Path, run_id: str) -> pl.DataFrame:
     """Load and validate candidate pairs for one run."""
-    table = pq.read_table(get_blocking_run_output_dir(data_dir, run_id) / "candidate_pairs.parquet")
+    table = pq.read_table(
+        get_blocking_run_output_dir(data_dir, run_id) / "candidate_pairs.parquet"
+    )
     errors = schemas.validate_contract_rules(table, "candidate_pairs")
     if errors:
         raise ValueError(f"candidate_pairs failed contract validation: {errors}")
@@ -701,7 +762,9 @@ def _load_candidate_pairs(data_dir: Path, run_id: str) -> pl.DataFrame:
 def _load_scored_pairs(data_dir: Path, run_id: str) -> pl.DataFrame:
     """Load and validate scored pairs for one run."""
     scored_path = get_scored_pairs_output_path(data_dir, run_id)
-    candidate_table = pq.read_table(get_blocking_run_output_dir(data_dir, run_id) / "candidate_pairs.parquet")
+    candidate_table = pq.read_table(
+        get_blocking_run_output_dir(data_dir, run_id) / "candidate_pairs.parquet"
+    )
     table = pq.read_table(scored_path)
     errors = schemas.validate_contract_rules(table, "scored_pairs", candidate_table)
     if errors:
@@ -1315,6 +1378,8 @@ def _write_evaluation_markdown(report: Mapping[str, Any], path: Path) -> None:
     scope = report["metric_scope"]
     metrics = report["metrics"]
     stage_metrics = report["stage_metrics"]
+    resolution_stage = stage_metrics.get("resolution", {})
+    resolution_thresholds = resolution_stage.get("thresholds", {})
     alignment = report["alignment"]
     regression_checks = report["regression_checks"]
     error_analysis = report["error_analysis"]
@@ -1347,9 +1412,18 @@ def _write_evaluation_markdown(report: Mapping[str, Any], path: Path) -> None:
             ["Item", "Value"],
             [
                 ["Evaluation entity count", scope["evaluation_entity_count"]],
-                ["Evaluation candidate pair count", scope["evaluation_candidate_pair_count"]],
-                ["Excluded unmatched entities", scope["excluded_unmatched_entity_count"]],
-                ["Excluded ambiguous entities", scope["excluded_ambiguous_entity_count"]],
+                [
+                    "Evaluation candidate pair count",
+                    scope["evaluation_candidate_pair_count"],
+                ],
+                [
+                    "Excluded unmatched entities",
+                    scope["excluded_unmatched_entity_count"],
+                ],
+                [
+                    "Excluded ambiguous entities",
+                    scope["excluded_ambiguous_entity_count"],
+                ],
                 ["Excluded candidate pairs", scope["excluded_candidate_pair_count"]],
             ],
         ),
@@ -1359,14 +1433,25 @@ def _write_evaluation_markdown(report: Mapping[str, Any], path: Path) -> None:
         _markdown_table(
             ["Metric", "Value"],
             [
-                ["Pairwise precision", _format_markdown_metric(metrics["pairwise_precision"])],
-                ["Pairwise recall", _format_markdown_metric(metrics["pairwise_recall"])],
+                [
+                    "Pairwise precision",
+                    _format_markdown_metric(metrics["pairwise_precision"]),
+                ],
+                [
+                    "Pairwise recall",
+                    _format_markdown_metric(metrics["pairwise_recall"]),
+                ],
                 ["Pairwise F1", _format_markdown_metric(metrics["pairwise_f1"])],
+                ["Pairwise F0.5", _format_markdown_metric(metrics["pairwise_f0_5"])],
                 ["ARI", _format_markdown_metric(metrics["ari"])],
                 ["NMI", _format_markdown_metric(metrics["nmi"])],
-                ["B-cubed precision", _format_markdown_metric(metrics["bcubed_precision"])],
+                [
+                    "B-cubed precision",
+                    _format_markdown_metric(metrics["bcubed_precision"]),
+                ],
                 ["B-cubed recall", _format_markdown_metric(metrics["bcubed_recall"])],
                 ["B-cubed F1", _format_markdown_metric(metrics["bcubed_f1"])],
+                ["B-cubed F0.5", _format_markdown_metric(metrics["bcubed_f0_5"])],
             ],
         ),
         "",
@@ -1407,6 +1492,20 @@ def _write_evaluation_markdown(report: Mapping[str, Any], path: Path) -> None:
                         f"threshold={_format_markdown_metric(stage_metrics['matching']['score_threshold'])}"
                     ),
                 ],
+                [
+                    "Resolution",
+                    "-",
+                    "-",
+                    "-",
+                    (
+                        f"retained_edges={resolution_stage.get('retained_edge_count', '-')}, "
+                        f"components={resolution_stage.get('component_count', '-')}, "
+                        "keep="
+                        f"{_format_markdown_metric(resolution_thresholds.get('keep_score_threshold', '-'))}, "
+                        "neutral="
+                        f"{_format_markdown_metric(resolution_thresholds.get('objective_neutral_threshold', '-'))}"
+                    ),
+                ],
             ],
         ),
         "",
@@ -1415,11 +1514,17 @@ def _write_evaluation_markdown(report: Mapping[str, Any], path: Path) -> None:
         _markdown_table(
             ["Item", "Value"],
             [
-                ["Matched mention rate", _format_markdown_metric(alignment["matched_mention_rate"])],
+                [
+                    "Matched mention rate",
+                    _format_markdown_metric(alignment["matched_mention_rate"]),
+                ],
                 ["Trusted gold mentions", alignment["trusted_gold_mentions"]],
                 ["Matched gold mentions", alignment["matched_gold_mentions"]],
                 ["Entities with gold group", alignment["entities_with_gold_group"]],
-                ["Entities without gold match", alignment["entities_without_gold_match"]],
+                [
+                    "Entities without gold match",
+                    alignment["entities_without_gold_match"],
+                ],
                 [
                     "Entities with ambiguous gold groups",
                     alignment["entities_with_ambiguous_gold_groups"],
@@ -1470,9 +1575,14 @@ def _write_evaluation_markdown(report: Mapping[str, Any], path: Path) -> None:
                 [
                     [
                         "Clusters with false merge",
-                        error_analysis["false_merges"]["cluster_count_with_false_merge"],
+                        error_analysis["false_merges"][
+                            "cluster_count_with_false_merge"
+                        ],
                     ],
-                    ["False-merge pair count", error_analysis["false_merges"]["pair_count"]],
+                    [
+                        "False-merge pair count",
+                        error_analysis["false_merges"]["pair_count"],
+                    ],
                 ],
             ),
             *_false_merge_example_lines(error_analysis["false_merges"]["examples"]),
@@ -1498,13 +1608,17 @@ def _write_evaluation_markdown(report: Mapping[str, Any], path: Path) -> None:
                     [
                         "Missing gold mentions by type",
                         _compact_markdown_value(
-                            error_analysis["extraction"]["missing_gold_mentions_by_type"]
+                            error_analysis["extraction"][
+                                "missing_gold_mentions_by_type"
+                            ]
                         ),
                     ],
                     [
                         "Spurious predicted mentions by type",
                         _compact_markdown_value(
-                            error_analysis["extraction"]["spurious_predicted_mentions_by_type"]
+                            error_analysis["extraction"][
+                                "spurious_predicted_mentions_by_type"
+                            ]
                         ),
                     ],
                 ],
@@ -1557,7 +1671,11 @@ def _compact_markdown_value(value: Any, *, max_length: int = 140) -> str:
         return "yes" if value else "no"
     if isinstance(value, (int, float)):
         return _format_markdown_metric(value)
-    text = json.dumps(value, sort_keys=True) if isinstance(value, (dict, list)) else str(value)
+    text = (
+        json.dumps(value, sort_keys=True)
+        if isinstance(value, (dict, list))
+        else str(value)
+    )
     if len(text) > max_length:
         return f"{text[: max_length - 3]}..."
     return text
@@ -1600,7 +1718,9 @@ def _false_split_example_lines(examples: Sequence[Mapping[str, Any]]) -> list[st
     return lines
 
 
-def _mention_example_lines(title: str, examples: Sequence[Mapping[str, Any]]) -> list[str]:
+def _mention_example_lines(
+    title: str, examples: Sequence[Mapping[str, Any]]
+) -> list[str]:
     """Render a compact mention-example list."""
     if not examples:
         return [f"{title}: none"]
@@ -1632,11 +1752,11 @@ def _print_console_summary(
         f"blocking_recall={blocking['gold_positive_pair_recall']:.3f} "
         f"matching_f1={matching['f1']:.3f} "
         f"pairwise={metrics['pairwise_precision']:.3f}/{metrics['pairwise_recall']:.3f}/"
-        f"{metrics['pairwise_f1']:.3f} "
+        f"{metrics['pairwise_f1']:.3f}/{metrics['pairwise_f0_5']:.3f} "
         f"ari={metrics['ari']:.3f} "
         f"nmi={metrics['nmi']:.3f} "
         f"bcubed={metrics['bcubed_precision']:.3f}/{metrics['bcubed_recall']:.3f}/"
-        f"{metrics['bcubed_f1']:.3f} "
+        f"{metrics['bcubed_f1']:.3f}/{metrics['bcubed_f0_5']:.3f} "
         f"checks={'passed' if report['regression_checks']['passed'] else 'failed'} "
         f"json={report_path} md={markdown_report_path}"
     )

@@ -24,10 +24,15 @@ from src.matching.fold_training import (
 )
 from src.matching.run import run_features
 from src.shared.paths import get_evaluation_labels_path
-from src.synthetic.build_matching_dataset import build_matching_dataset, load_labeled_feature_matrix
+from src.synthetic.build_matching_dataset import (
+    build_matching_dataset,
+    load_labeled_feature_matrix,
+)
 
 
-def _variant_triplet(base: str, alias: str, alt: str, context_prefix: str, index: int) -> list[dict]:
+def _variant_triplet(
+    base: str, alias: str, alt: str, context_prefix: str, index: int
+) -> list[dict]:
     """Build three text/context variants for one synthetic identity group."""
     return [
         {
@@ -49,8 +54,18 @@ def _payload(run_id: str, suffix: str) -> dict:
     """Return a compact synthetic payload with enough label diversity per run."""
     groups: list[dict] = []
     person_groups = [
-        (f"per_alice_{suffix}", f"Alice Hansen {suffix}", f"A. Hansen {suffix}", f"Alice H {suffix}"),
-        (f"per_bob_{suffix}", f"Bjarne Olsen {suffix}", f"B. Olsen {suffix}", f"Bjarne O {suffix}"),
+        (
+            f"per_alice_{suffix}",
+            f"Alice Hansen {suffix}",
+            f"A. Hansen {suffix}",
+            f"Alice H {suffix}",
+        ),
+        (
+            f"per_bob_{suffix}",
+            f"Bjarne Olsen {suffix}",
+            f"B. Olsen {suffix}",
+            f"Bjarne O {suffix}",
+        ),
     ]
     for index, (group_id, base, alias, alt) in enumerate(person_groups, start=1):
         groups.append(
@@ -63,8 +78,18 @@ def _payload(run_id: str, suffix: str) -> dict:
         )
 
     org_groups = [
-        (f"org_dnb_{suffix}", f"Den Norske Bank {suffix}", f"DNB {suffix}", f"DNB ASA {suffix}"),
-        (f"org_taxi_{suffix}", f"Oslo Taxi {suffix}", f"Oslo Taxi AS {suffix}", f"Taxi Oslo {suffix}"),
+        (
+            f"org_dnb_{suffix}",
+            f"Den Norske Bank {suffix}",
+            f"DNB {suffix}",
+            f"DNB ASA {suffix}",
+        ),
+        (
+            f"org_taxi_{suffix}",
+            f"Oslo Taxi {suffix}",
+            f"Oslo Taxi AS {suffix}",
+            f"Taxi Oslo {suffix}",
+        ),
     ]
     for index, (group_id, base, alias, alt) in enumerate(org_groups, start=1):
         groups.append(
@@ -96,7 +121,9 @@ def fold_training_sources(tmp_path: Path) -> list[FoldTrainingSource]:
         payload = _payload(run_id, str(index))
         identity_groups_path = tmp_path / f"{case_name}.json"
         identity_groups_path.write_text(json.dumps(payload), encoding="utf-8")
-        build_matching_dataset(identity_groups_path, data_dir, max_pairs=2500, seed=7 + index)
+        build_matching_dataset(
+            identity_groups_path, data_dir, max_pairs=2500, seed=7 + index
+        )
         run_features(data_dir, run_id)
         labels_path = get_evaluation_labels_path(data_dir, run_id)
         labels_path.parent.mkdir(parents=True, exist_ok=True)
@@ -126,16 +153,22 @@ def test_multi_run_loader_preserves_source_order_and_label_alignment(
         selected_sources[1].run_id,
     )
 
-    assert training_matrix.metadata["run_summaries"][0]["case_name"] == selected_sources[0].case_name
-    assert training_matrix.metadata["run_summaries"][1]["case_name"] == selected_sources[1].case_name
+    assert (
+        training_matrix.metadata["run_summaries"][0]["case_name"]
+        == selected_sources[0].case_name
+    )
+    assert (
+        training_matrix.metadata["run_summaries"][1]["case_name"]
+        == selected_sources[1].case_name
+    )
     assert training_matrix.X_train.height == first_x.height + second_x.height
     assert training_matrix.y_train.len() == first_y.len() + second_y.len()
-    assert training_matrix.X_train[: first_x.height].to_dict(as_series=False) == first_x.to_dict(
+    assert training_matrix.X_train[: first_x.height].to_dict(
         as_series=False
-    )
-    assert training_matrix.X_train[first_x.height :].to_dict(as_series=False) == second_x.to_dict(
+    ) == first_x.to_dict(as_series=False)
+    assert training_matrix.X_train[first_x.height :].to_dict(
         as_series=False
-    )
+    ) == second_x.to_dict(as_series=False)
     assert training_matrix.y_train[: first_y.len()].to_list() == first_y.to_list()
     assert training_matrix.y_train[first_y.len() :].to_list() == second_y.to_list()
 
@@ -152,7 +185,9 @@ def test_train_and_save_fold_model_writes_fold_training_metadata(
         model_version="lightgbm_case_fold__demo",
     )
 
-    metadata = json.loads((model_dir / "reranker_model_metadata.json").read_text(encoding="utf-8"))
+    metadata = json.loads(
+        (model_dir / "reranker_model_metadata.json").read_text(encoding="utf-8")
+    )
 
     assert metadata["model_version"] == "lightgbm_case_fold__demo"
     assert metadata["training_param_source"] == "fold_training"
@@ -161,9 +196,10 @@ def test_train_and_save_fold_model_writes_fold_training_metadata(
         "case_alpha",
         "case_beta",
     ]
-    assert result["training_metadata"]["labeled_row_count"] == metadata["fold_training"][
-        "labeled_row_count"
-    ]
+    assert (
+        result["training_metadata"]["labeled_row_count"]
+        == metadata["fold_training"]["labeled_row_count"]
+    )
 
 
 def test_fold_summary_row_and_csv_capture_key_metrics(tmp_path: Path) -> None:
@@ -176,11 +212,13 @@ def test_fold_summary_row_and_csv_capture_key_metrics(tmp_path: Path) -> None:
             "pairwise_precision": 0.7,
             "pairwise_recall": 0.54,
             "pairwise_f1": 0.61,
+            "pairwise_f0_5": 0.66,
             "ari": 0.33,
             "nmi": 0.44,
             "bcubed_precision": 0.74,
             "bcubed_recall": 0.7,
             "bcubed_f1": 0.72,
+            "bcubed_f0_5": 0.73,
         },
         "stage_metrics": {
             "blocking": {"gold_positive_pair_recall": 0.9},
@@ -212,8 +250,10 @@ def test_fold_summary_row_and_csv_capture_key_metrics(tmp_path: Path) -> None:
     assert row["pairwise_precision"] == 0.7
     assert row["pairwise_recall"] == 0.54
     assert row["pairwise_f1"] == 0.61
+    assert row["pairwise_f0_5"] == 0.66
     assert row["bcubed_precision"] == 0.74
     assert row["bcubed_recall"] == 0.7
+    assert row["bcubed_f0_5"] == 0.73
     assert row["blocking_positive_pair_recall"] == 0.9
     assert csv_rows == [
         {
@@ -229,11 +269,13 @@ def test_fold_summary_row_and_csv_capture_key_metrics(tmp_path: Path) -> None:
             "pairwise_precision": 0.7,
             "pairwise_recall": 0.54,
             "pairwise_f1": 0.61,
+            "pairwise_f0_5": 0.66,
             "ari": 0.33,
             "nmi": 0.44,
             "bcubed_precision": 0.74,
             "bcubed_recall": 0.7,
             "bcubed_f1": 0.72,
+            "bcubed_f0_5": 0.73,
             "blocking_positive_pair_recall": 0.9,
             "matching_pairwise_precision": 0.8,
             "matching_pairwise_recall": 0.5,
@@ -256,11 +298,13 @@ def test_fold_markdown_writers_include_full_metric_surface(tmp_path: Path) -> No
         "pairwise_precision": 0.7,
         "pairwise_recall": 0.54,
         "pairwise_f1": 0.61,
+        "pairwise_f0_5": 0.66,
         "ari": 0.33,
         "nmi": 0.44,
         "bcubed_precision": 0.74,
         "bcubed_recall": 0.7,
         "bcubed_f1": 0.72,
+        "bcubed_f0_5": 0.73,
         "blocking_positive_pair_recall": 0.9,
         "matching_pairwise_precision": 0.8,
         "matching_pairwise_recall": 0.5,
@@ -289,9 +333,12 @@ def test_fold_markdown_writers_include_full_metric_surface(tmp_path: Path) -> No
 
     assert "## Final Clustering Metrics" in fold_markdown
     assert "Pairwise precision" in fold_markdown
+    assert "Pairwise F0.5" in fold_markdown
+    assert "B-cubed F0.5" in fold_markdown
     assert "/tmp/fold_demo/evaluation_report.md" in fold_markdown
     assert "macro_avg" in aggregate_markdown
     assert f"{macro_row['pairwise_f1']:.3f}" in aggregate_markdown
+    assert "B-cubed F0.5" in aggregate_markdown
 
 
 def test_fold_config_rejects_duplicate_train_cases() -> None:

@@ -8,6 +8,7 @@ from src.evaluation.metrics import (
     bcubed_metrics,
     clustering_metrics,
     mention_metrics,
+    pairwise_f_beta_from_metrics,
     pairwise_metrics,
     positive_pairs_from_memberships,
 )
@@ -54,11 +55,60 @@ def test_clustering_metrics_match_toy_merge_split_case() -> None:
     assert metrics["pairwise_precision"] == pytest.approx(1 / 3)
     assert metrics["pairwise_recall"] == pytest.approx(0.5)
     assert metrics["pairwise_f1"] == pytest.approx(0.4)
+    assert metrics["pairwise_f0_5"] == pytest.approx(5 / 14)
     assert 0.0 <= metrics["ari"] <= 1.0
     assert 0.0 <= metrics["nmi"] <= 1.0
     assert metrics["bcubed_precision"] == pytest.approx(2 / 3)
     assert metrics["bcubed_recall"] == pytest.approx(0.75)
     assert metrics["bcubed_f1"] == pytest.approx(12 / 17)
+    assert metrics["bcubed_f0_5"] == pytest.approx(15 / 22)
+
+
+def test_bcubed_metrics_include_precision_weighted_f_beta() -> None:
+    metrics = bcubed_metrics(
+        gold_membership_by_entity={
+            "e1": "g_a",
+            "e2": "g_a",
+            "e3": "g_b",
+            "e4": "g_b",
+        },
+        predicted_membership_by_entity={
+            "e1": "c_a",
+            "e2": "c_a",
+            "e3": "c_b",
+            "e4": "c_c",
+        },
+    )
+
+    assert metrics["precision"] == pytest.approx(1.0)
+    assert metrics["recall"] == pytest.approx(0.75)
+    assert metrics["f1"] == pytest.approx(6 / 7)
+    assert metrics["f0_5"] == pytest.approx(15 / 16)
+    assert metrics["f0_5"] > metrics["f1"]
+
+
+def test_pairwise_f_beta_from_metrics_is_precision_weighted() -> None:
+    metrics = {"pairwise_precision": 1.0, "pairwise_recall": 0.5}
+
+    assert pairwise_f_beta_from_metrics(metrics, beta=1.0) == pytest.approx(2 / 3)
+    assert pairwise_f_beta_from_metrics(metrics, beta=0.5) == pytest.approx(5 / 6)
+
+
+def test_pairwise_f_beta_from_metrics_handles_zero_precision_or_recall() -> None:
+    assert (
+        pairwise_f_beta_from_metrics(
+            {"pairwise_precision": 0.0, "pairwise_recall": 1.0},
+            beta=0.5,
+        )
+        == 0.0
+    )
+    assert (
+        pairwise_f_beta_from_metrics(
+            {"pairwise_precision": 1.0, "pairwise_recall": 0.0},
+            beta=0.5,
+        )
+        == 0.0
+    )
 
 
 def test_bcubed_metrics_require_matching_entity_sets() -> None:
