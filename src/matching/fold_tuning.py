@@ -12,6 +12,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+import logging
 import math
 import os
 import shutil
@@ -62,6 +63,7 @@ from src.shared import schemas
 from src.shared.paths import (
     get_blocking_run_output_dir,
     get_evaluation_labels_path,
+    get_evaluation_report_path,
     get_evaluation_run_output_dir,
     get_extraction_run_output_dir,
     get_ingestion_run_output_dir,
@@ -82,10 +84,13 @@ CASE_FOLD_FOLD_AGGREGATION = "geometric_mean"
 CASE_FOLD_FINGERPRINT_ATTR = "case_fold_fingerprint"
 CASE_FOLD_FINGERPRINT_HASH_ATTR = "case_fold_fingerprint_hash"
 CASE_FOLD_STUDY_FINGERPRINT_VERSION = 5
-CASE_FOLD_OBJECTIVE_VERSION = 4
+CASE_FOLD_OBJECTIVE_VERSION = 5
 CASE_FOLD_SEARCH_SPACE_VERSION = 2
 DEFAULT_FAILED_TRIAL_VALUE = -1.0
 DEFAULT_PAIRWISE_BETA = 0.5
+FINAL_TEST_DIRNAME = "final_test"
+FINAL_TEST_RUN_DIRNAME = "current"
+FINAL_TEST_PREP_FOLD_NAME = "final_test_holdout"
 RESOLUTION_KEEP_THRESHOLD_PARAM = "keep_score_threshold"
 RESOLUTION_NEUTRAL_THRESHOLD_PARAM = "objective_neutral_threshold"
 RESOLUTION_THRESHOLD_FIELDS = (
@@ -104,6 +109,7 @@ RESOLUTION_THRESHOLD_SEARCH_SPACE = {
 
 
 FoldRunner = Callable[..., dict[str, Any]]
+logger = logging.getLogger(__name__)
 
 
 def _validate_failed_trial_value(failed_trial_value: float) -> None:
@@ -204,6 +210,7 @@ def _build_case_fold_study_fingerprint(
     folds: list[CaseFoldTuningFold],
     prepared_by_fold: dict[str, dict[str, PreparedCaseRun]],
     *,
+    test_case_names: list[str] | None = None,
     match_threshold: float,
     enable_shap: bool,
     failed_trial_value: float,
@@ -228,6 +235,7 @@ def _build_case_fold_study_fingerprint(
         "enable_shap": bool(enable_shap),
         "failed_trial_value": float(failed_trial_value),
         "case_names": case_names,
+        "test_case_names": list(test_case_names or []),
         "case_input_identities": _case_input_identities_for_folds(
             folds,
             prepared_by_fold,
@@ -557,6 +565,57 @@ def _validate_case_fold_study_inputs(
         _validate_fold_train_label_classes(fold, train_label_frames)
 
 
+def _validate_test_case_names(
+    folds: list[CaseFoldTuningFold],
+    test_cases: dict[str, CaseFoldTuningCase] | None,
+) -> None:
+    """Keep final hold-out cases out of every tuning fold."""
+    if not test_cases:
+        return
+    configured_names: set[str] = set()
+    for case_key, case in test_cases.items():
+        if case_key != case.name:
+            raise ValueError(
+                f"test_cases key and case name must match: {case_key} != {case.name}"
+            )
+        _require_safe_name(case.name, "test case")
+        if case.name in configured_names:
+            raise ValueError(f"duplicate test case name: {case.name}")
+        configured_names.add(case.name)
+    fold_case_names = {
+        case_name
+        for fold in folds
+        for case_name in [fold.held_out_case, *fold.train_cases]
+    }
+    overlap = sorted(configured_names & fold_case_names)
+    if overlap:
+        raise ValueError(f"test_cases must not overlap with fold cases: {overlap}")
+
+
+def _validate_prepared_test_cases(
+    test_cases: dict[str, CaseFoldTuningCase] | None,
+    prepared_tests: dict[str, PreparedCaseRun] | None,
+) -> None:
+    """Keep injected prepared hold-out runs aligned with the configured cases."""
+    if prepared_tests is None:
+        return
+    if not test_cases:
+        raise ValueError("prepared_tests require matching test_cases")
+    expected = set(test_cases)
+    actual = set(prepared_tests)
+    if actual != expected:
+        raise ValueError(
+            "prepared_tests must match test_cases: "
+            f"expected {sorted(expected)}, got {sorted(actual)}"
+        )
+    for case_name, prepared_run in prepared_tests.items():
+        if prepared_run.case_name != case_name:
+            raise ValueError(
+                "prepared_tests key and prepared case name must match: "
+                f"{case_name} != {prepared_run.case_name}"
+            )
+
+
 def _ensure_case_fold_study_fingerprint(
     study: Any,
     fingerprint: dict[str, Any],
@@ -775,6 +834,242 @@ def _run_trial_fold(
     return row
 
 
+def _geomean_pairwise_f_beta(
+    rows: list[dict[str, Any]],
+    *,
+    pairwise_beta: float,
+    label_key: str,
+    label_kind: str,
+) -> float:
+    """Aggregate pairwise F-beta with the same zero-collapse rule everywhere."""
+    # Geometric mean punishes inconsistency across heterogeneous cases more than
+    # an arithmetic mean: by AM >= GM, a policy that does well on one case and
+    # poorly on another scores lower here than under a plain average, so Optuna
+    # cannot trade a strong case for a weak one. A single zero-valued fold
+    # collapses the whole objective, matching the deployment risk where one
+    # unusable fold disqualifies the trial entirely.
+    
+    _validate_pairwise_beta(pairwise_beta)
+    if not rows:
+        raise ValueError(f"{label_kind} aggregate requires at least one row")
+
+    values: list[float] = []
+    for row in rows:
+        label = row.get(label_key, "<unknown>")
+        try:
+            value = pairwise_f_beta_from_metrics(row, beta=float(pairwise_beta))
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError(f"{label_kind} {label} has unusable metric") from exc
+        if not math.isfinite(value):
+            raise ValueError(f"{label_kind} {label} has unusable metric")
+        row[CASE_FOLD_OBJECTIVE_METRIC] = value
+        row["pairwise_beta"] = float(pairwise_beta)
+        values.append(float(value))
+
+    if any(value <= 0.0 for value in values):
+        return 0.0
+    return math.prod(values) ** (1.0 / len(values))
+
+
+def _prepare_test_case_artifacts(
+    test_cases: dict[str, CaseFoldTuningCase],
+    output_root: Path | str,
+) -> dict[str, PreparedCaseRun]:
+    """Prepare final hold-out features under the final-test artifact root."""
+    if not test_cases:
+        return {}
+
+    case_names = list(test_cases)
+    prep_fold = CaseFoldTuningFold(
+        FINAL_TEST_PREP_FOLD_NAME,
+        case_names[0],
+        case_names[1:],
+    )
+    prepared_by_fold = prepare_case_fold_artifacts(
+        test_cases,
+        [prep_fold],
+        Path(output_root) / FINAL_TEST_DIRNAME,
+    )
+    prepared = prepared_by_fold[FINAL_TEST_PREP_FOLD_NAME]
+    return {case_name: prepared[case_name] for case_name in case_names}
+
+
+def _fold_referenced_prepared_runs(
+    folds: list[CaseFoldTuningFold],
+    prepared_by_fold: dict[str, dict[str, PreparedCaseRun]],
+) -> dict[str, PreparedCaseRun]:
+    """Return one prepared run per case used by any tuning fold."""
+    prepared_runs: dict[str, PreparedCaseRun] = {}
+    for fold in folds:
+        for case_name in [*fold.train_cases, fold.held_out_case]:
+            if case_name not in prepared_runs:
+                prepared_runs[case_name] = prepared_by_fold[fold.name][case_name]
+    return prepared_runs
+
+
+def _final_test_case_row(
+    case_run: PreparedCaseRun,
+    evaluation_report: dict[str, Any],
+    *,
+    pairwise_beta: float,
+) -> dict[str, Any]:
+    """Extract the compact metric row stored for one final hold-out case."""
+    metrics = evaluation_report["metrics"]
+    matching = evaluation_report.get("stage_metrics", {}).get("matching", {})
+    metric_scope = evaluation_report.get("metric_scope", {})
+    row = {
+        "case_name": case_run.case_name,
+        "run_id": case_run.run_id,
+        "data_dir": str(case_run.data_dir),
+        "evaluation_report_path": str(
+            get_evaluation_report_path(case_run.data_dir, case_run.run_id)
+        ),
+        "evaluation_entity_count": metric_scope.get("evaluation_entity_count"),
+        "evaluation_candidate_pair_count": metric_scope.get(
+            "evaluation_candidate_pair_count"
+        ),
+        "pairwise_precision": float(metrics["pairwise_precision"]),
+        "pairwise_recall": float(metrics["pairwise_recall"]),
+        "pairwise_f1": float(metrics["pairwise_f1"]),
+        "pairwise_f0_5": float(metrics["pairwise_f0_5"]),
+        "ari": float(metrics["ari"]),
+        "nmi": float(metrics["nmi"]),
+        "bcubed_precision": float(metrics["bcubed_precision"]),
+        "bcubed_recall": float(metrics["bcubed_recall"]),
+        "bcubed_f1": float(metrics["bcubed_f1"]),
+        "bcubed_f0_5": float(metrics["bcubed_f0_5"]),
+        "matching_pairwise_precision": matching.get("precision"),
+        "matching_pairwise_recall": matching.get("recall"),
+        "matching_pairwise_f1": matching.get("f1"),
+    }
+    row[CASE_FOLD_OBJECTIVE_METRIC] = pairwise_f_beta_from_metrics(
+        row,
+        beta=pairwise_beta,
+    )
+    row["pairwise_beta"] = float(pairwise_beta)
+    return row
+
+
+def _run_final_test_evaluation(
+    best_trial: Any,
+    best_params: dict[str, Any],
+    resolution_kwargs: dict[str, float],
+    folds: list[CaseFoldTuningFold],
+    prepared_by_fold: dict[str, dict[str, PreparedCaseRun]],
+    prepared_tests: dict[str, PreparedCaseRun],
+    final_model_dir: Path | str,
+    match_threshold: float,
+    enable_shap: bool,
+    *,
+    pairwise_beta: float,
+) -> dict[str, Any]:
+    """Train one final model and evaluate each untouched hold-out case once."""
+    from src.matching.run import run_scoring
+    from src.resolution.run import run_resolution
+
+    final_model_dir = Path(final_model_dir)
+    final_run_root = final_model_dir.parent
+    shutil.rmtree(final_run_root, ignore_errors=True)
+    final_run_root.mkdir(parents=True, exist_ok=True)
+
+    try:
+        train_sources = [
+            FoldTrainingSource(
+                case_name=case_name,
+                data_dir=prepared_run.data_dir,
+                run_id=prepared_run.run_id,
+            )
+            for case_name, prepared_run in _fold_referenced_prepared_runs(
+                folds,
+                prepared_by_fold,
+            ).items()
+        ]
+        training_result = train_and_save_fold_model(
+            train_sources,
+            final_model_dir,
+            model_version=f"{DEFAULT_FOLD_MODEL_VERSION_PREFIX}_optuna__final_test",
+            training_params=best_params,
+        )
+
+        rows: list[dict[str, Any]] = []
+        for case_name, prepared_test in prepared_tests.items():
+            test_run = _materialize_trial_case_run(
+                prepared_test,
+                final_run_root / "cases" / case_name,
+            )
+            run_scoring(
+                test_run.data_dir,
+                test_run.run_id,
+                model_dir=final_model_dir,
+                enable_shap=enable_shap,
+            )
+            run_resolution(test_run.data_dir, test_run.run_id, **resolution_kwargs)
+            evaluation_report = run_evaluation(
+                test_run.data_dir,
+                test_run.run_id,
+                test_run.gold_path,
+                match_threshold=match_threshold,
+            )
+            rows.append(
+                _final_test_case_row(
+                    test_run,
+                    evaluation_report,
+                    pairwise_beta=pairwise_beta,
+                )
+            )
+
+        aggregate = _geomean_pairwise_f_beta(
+            rows,
+            pairwise_beta=pairwise_beta,
+            label_key="case_name",
+            label_kind="test case",
+        )
+        return {
+            "status": "completed",
+            "best_trial_number": int(best_trial.number),
+            "test_cases": list(prepared_tests),
+            "test_per_case": {row["case_name"]: row for row in rows},
+            "test_aggregate": aggregate,
+            "test_match_threshold": float(match_threshold),
+            "test_resolution_thresholds": dict(resolution_kwargs),
+            "pairwise_beta": float(pairwise_beta),
+            "fold_aggregation": CASE_FOLD_FOLD_AGGREGATION,
+            "model_dir": str(final_model_dir),
+            "training": training_result,
+        }
+    except Exception:
+        shutil.rmtree(final_run_root, ignore_errors=True)
+        raise
+
+
+def _remove_final_test_artifacts(output_root: Path | str) -> bool:
+    """Remove stale final-test output when the current study cannot score it."""
+    final_test_root = Path(output_root) / FINAL_TEST_DIRNAME
+    if not final_test_root.exists():
+        return False
+    shutil.rmtree(final_test_root)
+    return True
+
+
+def _attach_final_test_to_trial_summary(
+    output_root: Path | str,
+    trial_number: int,
+    final_test: dict[str, Any],
+) -> None:
+    """Attach final hold-out results to the selected trial summary."""
+    summary_path = (
+        Path(output_root)
+        / "trials"
+        / f"trial_{trial_number:04d}"
+        / TRIAL_SUMMARY_FILENAME
+    )
+    if not summary_path.exists():
+        return
+    payload = json.loads(summary_path.read_text(encoding="utf-8"))
+    payload["final_test"] = final_test
+    write_fold_summary_json(summary_path, payload)
+
+
 def _macro_objective(
     rows: list[dict[str, Any]],
     pairwise_beta: float = DEFAULT_PAIRWISE_BETA,
@@ -786,27 +1081,12 @@ def _macro_objective(
     # cannot trade a strong case for a weak one. A single zero-valued fold
     # collapses the whole objective, matching the deployment risk where one
     # unusable fold disqualifies the trial entirely.
-    _validate_pairwise_beta(pairwise_beta)
-    if not rows:
-        raise ValueError("case-fold objective requires at least one completed fold")
-    values: list[float] = []
-    for row in rows:
-        try:
-            value = pairwise_f_beta_from_metrics(row, beta=float(pairwise_beta))
-        except (KeyError, TypeError, ValueError) as exc:
-            raise ValueError(
-                f"fold {row.get('fold_name', '<unknown>')} has unusable metric"
-            ) from exc
-        if not math.isfinite(value):
-            raise ValueError(
-                f"fold {row.get('fold_name', '<unknown>')} has unusable metric"
-            )
-        row[CASE_FOLD_OBJECTIVE_METRIC] = value
-        row["pairwise_beta"] = float(pairwise_beta)
-        values.append(float(value))
-    if any(value <= 0.0 for value in values):
-        return 0.0
-    return math.prod(values) ** (1.0 / len(values))
+    return _geomean_pairwise_f_beta(
+        rows,
+        pairwise_beta=pairwise_beta,
+        label_key="fold_name",
+        label_kind="fold",
+    )
 
 
 def case_fold_objective(
@@ -910,6 +1190,7 @@ def _write_best_params_artifact(
     storage: str | None,
     study_name: str | None,
     pairwise_beta: float,
+    final_test: dict[str, Any] | None = None,
 ) -> str:
     """Persist trusted study params in the same shape as scoring metadata expects."""
     payload = {
@@ -926,6 +1207,19 @@ def _write_best_params_artifact(
         "storage": storage,
         "study_name": study_name,
     }
+    if final_test and final_test.get("status") == "completed":
+        payload.update(
+            {
+                "final_test": final_test,
+                "test_cases": final_test["test_cases"],
+                "test_per_case": final_test["test_per_case"],
+                "test_aggregate": final_test["test_aggregate"],
+                "test_match_threshold": final_test["test_match_threshold"],
+                "test_resolution_thresholds": final_test[
+                    "test_resolution_thresholds"
+                ],
+            }
+        )
     write_fold_summary_json(output_root / CASE_FOLD_BEST_PARAMS_FILENAME, payload)
     return CASE_FOLD_BEST_PARAMS_FILENAME
 
@@ -1128,6 +1422,51 @@ def _best_trial_fold_rows(best_trial: Any | None) -> list[dict[str, Any]]:
     return list(best_trial.user_attrs.get("fold_metrics", []))
 
 
+def _final_test_markdown_lines(final_test: dict[str, Any]) -> list[str]:
+    """Render final hold-out results or a short skip reason."""
+    lines = ["", "## Final Hold-Out Test", ""]
+    status = final_test.get("status")
+    if status != "completed":
+        lines.append(final_test.get("message", "Final hold-out test was not run."))
+        return lines
+
+    per_case = final_test.get("test_per_case", {})
+    rows = [per_case[case_name] for case_name in final_test.get("test_cases", [])]
+    lines.extend(
+        [
+            _markdown_table(
+                [
+                    "Case",
+                    "Pairwise F-beta",
+                    "Pairwise beta",
+                    "Pairwise P",
+                    "Pairwise R",
+                    "B-cubed R",
+                    "Run ID",
+                ],
+                [
+                    [
+                        row.get("case_name", ""),
+                        _format_markdown_metric(row.get("pairwise_f_beta", "")),
+                        _format_markdown_metric(row.get("pairwise_beta", "")),
+                        _format_markdown_metric(row.get("pairwise_precision", "")),
+                        _format_markdown_metric(row.get("pairwise_recall", "")),
+                        _format_markdown_metric(row.get("bcubed_recall", "")),
+                        row.get("run_id", ""),
+                    ]
+                    for row in rows
+                ],
+            ),
+            "",
+            (
+                "Geometric mean pairwise F-beta: "
+                f"{_format_markdown_metric(final_test.get('test_aggregate', ''))}"
+            ),
+        ]
+    )
+    return lines
+
+
 def write_fold_tuning_report_markdown(
     path: Path | str,
     *,
@@ -1258,6 +1597,7 @@ def write_fold_tuning_report_markdown(
         )
     else:
         lines.append("No trusted winning trial was available.")
+    lines.extend(_final_test_markdown_lines(summary["final_test"]))
     lines.append("")
     path.write_text("\n".join(lines), encoding="utf-8")
 
@@ -1276,7 +1616,9 @@ def run_case_fold_optuna_study(
     pairwise_beta: float = DEFAULT_PAIRWISE_BETA,
     min_pairwise_recall: float | None = None,
     failed_trial_value: float = DEFAULT_FAILED_TRIAL_VALUE,
+    test_cases: dict[str, CaseFoldTuningCase] | None = None,
     prepared_by_fold: dict[str, dict[str, PreparedCaseRun]] | None = None,
+    prepared_tests: dict[str, PreparedCaseRun] | None = None,
     fold_runner: FoldRunner = _run_trial_fold,
     keep_trial_artifacts: bool = False,
 ) -> dict[str, Any]:
@@ -1288,6 +1630,8 @@ def run_case_fold_optuna_study(
     _validate_pairwise_beta(pairwise_beta)
     _validate_min_pairwise_recall(min_pairwise_recall)
     _validate_failed_trial_value(failed_trial_value)
+    _validate_test_case_names(folds, test_cases)
+    _validate_prepared_test_cases(test_cases, prepared_tests)
 
     try:
         import optuna
@@ -1305,6 +1649,7 @@ def run_case_fold_optuna_study(
     fingerprint, fingerprint_hash = _build_case_fold_study_fingerprint(
         folds,
         effective_prepared,
+        test_case_names=list(test_cases or []),
         match_threshold=match_threshold,
         enable_shap=enable_shap,
         failed_trial_value=failed_trial_value,
@@ -1369,6 +1714,49 @@ def run_case_fold_optuna_study(
         if best_trial is not None
         else {}
     )
+    final_test: dict[str, Any]
+    if not test_cases:
+        final_test = {
+            "status": "not_configured",
+            "message": "No final hold-out test cases configured.",
+            "test_cases": [],
+        }
+    elif best_trial is None:
+        removed = _remove_final_test_artifacts(output_root)
+        logger.info(
+            "Skipping final hold-out test because no trusted best trial exists"
+        )
+        final_test = {
+            "status": "skipped_no_trusted_best",
+            "message": "Final hold-out test skipped because no trusted best trial exists.",
+            "test_cases": list(test_cases),
+            "stale_final_test_artifacts_removed": removed,
+        }
+    else:
+        _remove_stale_best_params_artifact(output_root)
+        effective_test_prepared = (
+            prepared_tests
+            if prepared_tests is not None
+            else _prepare_test_case_artifacts(test_cases, output_root)
+        )
+        final_test = _run_final_test_evaluation(
+            best_trial,
+            best_params,
+            best_resolution_thresholds,
+            folds,
+            effective_prepared,
+            effective_test_prepared,
+            output_root / FINAL_TEST_DIRNAME / FINAL_TEST_RUN_DIRNAME / "model",
+            match_threshold,
+            enable_shap,
+            pairwise_beta=pairwise_beta,
+        )
+        _attach_final_test_to_trial_summary(
+            output_root,
+            int(best_trial.number),
+            final_test,
+        )
+
     artifact_name = None
     if best_trial is not None:
         artifact_name = _write_best_params_artifact(
@@ -1382,6 +1770,7 @@ def run_case_fold_optuna_study(
             storage=storage,
             study_name=study_name,
             pairwise_beta=pairwise_beta,
+            final_test=final_test,
         )
         stale_artifact_removed = False
     else:
@@ -1425,6 +1814,7 @@ def run_case_fold_optuna_study(
             ),
             "stale_best_params_artifact_removed": stale_artifact_removed,
             "case_fold_fingerprint_hash": fingerprint_hash,
+            "final_test": final_test,
             "generated_at": datetime.now(timezone.utc).isoformat(),
         }
     )

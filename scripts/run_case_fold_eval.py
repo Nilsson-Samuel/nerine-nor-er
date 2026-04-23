@@ -187,6 +187,75 @@ def _parse_case_configs(
     return cases
 
 
+def _parse_test_case_configs(
+    payload: dict[str, Any],
+    config_path: Path,
+) -> dict[str, CaseConfig]:
+    """Load optional final hold-out case inputs from the runner config."""
+    raw_test_cases = payload.get("test_cases")
+    if not raw_test_cases:
+        return {}
+
+    base_dir = config_path.parent.resolve()
+    source_root_raw = payload.get("source_root", "data/raw")
+    source_root = _resolve_config_path(
+        base_dir, str(source_root_raw), Path.cwd() / "data/raw"
+    )
+    entries: list[tuple[str, dict[str, Any]]] = []
+    if isinstance(raw_test_cases, dict):
+        entries = [
+            (str(case_name), raw_case)
+            for case_name, raw_case in raw_test_cases.items()
+            if isinstance(raw_case, dict)
+        ]
+        if len(entries) != len(raw_test_cases):
+            raise ValueError("each test_cases entry must be an object")
+    elif isinstance(raw_test_cases, list):
+        for raw_case in raw_test_cases:
+            if not isinstance(raw_case, dict):
+                raise ValueError("each test_cases entry must be an object")
+            case_name = str(raw_case.get("name", "")).strip()
+            if not case_name:
+                raise ValueError("each test_cases entry must define name")
+            entries.append((case_name, raw_case))
+    else:
+        raise ValueError("test_cases must be a list or object when provided")
+
+    test_cases: dict[str, CaseConfig] = {}
+    for case_name, raw_case in entries:
+        configured_name = str(raw_case.get("name", case_name)).strip()
+        if configured_name and configured_name != case_name:
+            raise ValueError(
+                f"test case key and name must match: {case_name} != {configured_name}"
+            )
+        if case_name in test_cases:
+            raise ValueError(f"duplicate test case name: {case_name}")
+        default_case_root = source_root / case_name
+        default_gold_path = (
+            default_case_root / "annotation" / "gold_annotations.group_id_reviewed.csv"
+        )
+        case_root = _resolve_config_path(
+            base_dir, raw_case.get("case_root"), default_case_root
+        )
+        gold_path = _resolve_config_path(
+            base_dir, raw_case.get("gold_path"), default_gold_path
+        )
+        if not case_root.exists():
+            raise FileNotFoundError(
+                f"case_root does not exist for test case {case_name}: {case_root}"
+            )
+        if not gold_path.exists():
+            raise FileNotFoundError(
+                f"gold_path does not exist for test case {case_name}: {gold_path}"
+            )
+        test_cases[case_name] = CaseConfig(
+            name=case_name,
+            case_root=case_root,
+            gold_path=gold_path,
+        )
+    return test_cases
+
+
 def _parse_fold_configs(payload: dict[str, Any]) -> list[FoldConfig]:
     """Validate explicit manual folds from JSON config."""
     raw_folds = payload.get("folds")
@@ -228,7 +297,7 @@ def _parse_fold_configs(payload: dict[str, Any]) -> list[FoldConfig]:
 
 def _load_runner_config(
     config_path: Path,
-) -> tuple[dict[str, CaseConfig], list[FoldConfig]]:
+) -> tuple[dict[str, CaseConfig], list[FoldConfig], dict[str, CaseConfig]]:
     """Read and validate the case-fold runner config JSON."""
     payload = json.loads(config_path.read_text(encoding="utf-8"))
     cases = _parse_case_configs(payload, config_path)
@@ -240,7 +309,21 @@ def _load_runner_config(
                 raise ValueError(
                     f"fold {fold.name} references unknown case: {case_name}"
                 )
-    return cases, folds
+    test_cases = _parse_test_case_configs(payload, config_path)
+    case_overlap = sorted(set(test_cases) & set(cases))
+    if case_overlap:
+        raise ValueError(
+            f"test_cases must not overlap with cases: {case_overlap}"
+        )
+    fold_case_names = {
+        case_name for fold in folds for case_name in [fold.held_out_case, *fold.train_cases]
+    }
+    fold_overlap = sorted(set(test_cases) & fold_case_names)
+    if fold_overlap:
+        raise ValueError(
+            f"test_cases must not overlap with fold cases: {fold_overlap}"
+        )
+    return cases, folds, test_cases
 
 
 def _filter_folds(
@@ -449,7 +532,7 @@ def main() -> int:
     """CLI entrypoint."""
     args = parse_args()
     _configure_logging()
-    cases, folds = _load_runner_config(args.config.resolve())
+    cases, folds, _test_cases = _load_runner_config(args.config.resolve())
     selected_folds = _filter_folds(folds, args.fold_name)
     keep_score_threshold, objective_neutral_threshold = validate_resolution_thresholds(
         args.keep_score_threshold,

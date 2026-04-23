@@ -169,7 +169,7 @@ def main() -> int:
     """CLI entrypoint."""
     args = parse_args()
     _configure_logging()
-    cases, folds = _load_runner_config(args.config.resolve())
+    cases, folds, test_cases = _load_runner_config(args.config.resolve())
     selected_folds = _filter_folds(folds, args.fold_name)
     output_root = _resolve_output_root(args.output_root)
     logger.info("Writing case-fold tuning outputs under %s", output_root)
@@ -182,6 +182,7 @@ def main() -> int:
         match_threshold=args.match_threshold,
         pairwise_beta=args.pairwise_beta,
         min_pairwise_recall=args.min_pairwise_recall,
+        test_cases=_to_tuning_cases(test_cases),
         storage=args.storage,
         study_name=args.study_name,
         keep_trial_artifacts=args.keep_trial_artifacts,

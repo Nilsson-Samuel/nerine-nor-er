@@ -20,9 +20,11 @@ import pytest
 
 import src.matching.fold_preparation as fold_preparation
 import src.matching.fold_tuning as fold_tuning
+from scripts.run_case_fold_eval import _load_runner_config
 from scripts.run_case_fold_tuning import _build_default_output_root
 from src.matching import run as matching_run
 from src.matching.fold_preparation import get_prepared_case_manifest_path
+from src.matching.fold_training import FoldTrainingSource
 from src.matching.fold_tuning import (
     CASE_FOLD_BEST_PARAMS_FILENAME,
     CASE_FOLD_FINGERPRINT_ATTR,
@@ -38,6 +40,7 @@ from src.matching.fold_tuning import (
     RESOLUTION_NEUTRAL_THRESHOLD_PARAM,
     CaseFoldTuningCase,
     CaseFoldTuningFold,
+    FINAL_TEST_DIRNAME,
     PreparedCaseRun,
     case_fold_objective,
     run_case_fold_optuna_study,
@@ -353,6 +356,21 @@ def _fake_evaluation_report() -> dict[str, Any]:
     }
 
 
+def _fake_evaluation_report_with_score(score: float) -> dict[str, Any]:
+    """Return a complete evaluation report with uniform pairwise metrics."""
+    report = _fake_evaluation_report()
+    report["metrics"].update(
+        {
+            "pairwise_precision": score,
+            "pairwise_recall": score,
+            "pairwise_f1": score,
+            "pairwise_f0_5": score,
+            "bcubed_recall": score,
+        }
+    )
+    return report
+
+
 def _case_with_local_inputs(tmp_path: Path, case_name: str) -> CaseFoldTuningCase:
     """Create tiny local case inputs for manifest-focused preparation tests."""
     case_root = tmp_path / "cases" / case_name
@@ -361,6 +379,16 @@ def _case_with_local_inputs(tmp_path: Path, case_name: str) -> CaseFoldTuningCas
     gold_path = tmp_path / "gold" / f"{case_name}.csv"
     _write_dummy_artifact(gold_path, b"gold-v1")
     return CaseFoldTuningCase(case_name, case_root, gold_path)
+
+
+def _write_runner_case(tmp_path: Path, case_name: str) -> tuple[Path, Path]:
+    """Create the local files required by the runner config parser."""
+    case_root = tmp_path / "raw" / case_name
+    case_root.mkdir(parents=True, exist_ok=True)
+    _write_dummy_artifact(case_root / f"{case_name}.pdf", b"case document")
+    gold_path = case_root / "annotation" / "gold_annotations.group_id_reviewed.csv"
+    _write_dummy_artifact(gold_path, b"gold")
+    return case_root, gold_path
 
 
 def _install_fast_preparation_fakes(monkeypatch: Any, calls: dict[str, int]) -> None:
@@ -974,6 +1002,32 @@ def test_macro_objective_zero_fold_collapses_aggregate_to_zero() -> None:
     assert value == 0.0
 
 
+def test_final_test_geomean_zero_case_collapses_aggregate() -> None:
+    rows = [
+        {
+            "case_name": "case_good",
+            "pairwise_precision": 0.9,
+            "pairwise_recall": 0.9,
+        },
+        {
+            "case_name": "case_zero",
+            "pairwise_precision": 0.0,
+            "pairwise_recall": 0.0,
+        },
+    ]
+
+    value = fold_tuning._geomean_pairwise_f_beta(
+        rows,
+        pairwise_beta=DEFAULT_PAIRWISE_BETA,
+        label_key="case_name",
+        label_kind="test case",
+    )
+
+    assert value == 0.0
+    assert rows[0]["pairwise_f_beta"] == pytest.approx(0.9)
+    assert rows[1]["pairwise_f_beta"] == 0.0
+
+
 def test_case_fold_objective_rejects_non_negative_failed_trial_value(
     tmp_path: Path,
 ) -> None:
@@ -1032,6 +1086,73 @@ def test_case_fold_study_rejects_missing_prepared_fold(tmp_path: Path) -> None:
             output_root=tmp_path,
             n_trials=1,
             prepared_by_fold={},
+        )
+
+
+def test_case_fold_study_rejects_programmatic_test_case_overlap(
+    tmp_path: Path,
+) -> None:
+    folds = [CaseFoldTuningFold("fold_a", "case_a", ["case_b"])]
+
+    with pytest.raises(ValueError, match="test_cases must not overlap"):
+        run_case_fold_optuna_study(
+            cases={},
+            folds=folds,
+            output_root=tmp_path,
+            n_trials=1,
+            test_cases={
+                "case_a": CaseFoldTuningCase(
+                    "case_a",
+                    tmp_path / "unused_source",
+                    tmp_path / "unused_gold.csv",
+                )
+            },
+            prepared_by_fold=_prepared_by_fold_stub(tmp_path, folds),
+        )
+
+
+def test_case_fold_study_rejects_programmatic_test_case_key_name_mismatch(
+    tmp_path: Path,
+) -> None:
+    folds = [CaseFoldTuningFold("fold_a", "case_a", ["case_b"])]
+
+    with pytest.raises(ValueError, match="key and case name must match"):
+        run_case_fold_optuna_study(
+            cases={},
+            folds=folds,
+            output_root=tmp_path,
+            n_trials=1,
+            test_cases={
+                "case_test": CaseFoldTuningCase(
+                    "case_a",
+                    tmp_path / "unused_source",
+                    tmp_path / "unused_gold.csv",
+                )
+            },
+            prepared_by_fold=_prepared_by_fold_stub(tmp_path, folds),
+        )
+
+
+def test_case_fold_study_rejects_prepared_test_case_mismatch(
+    tmp_path: Path,
+) -> None:
+    folds = [CaseFoldTuningFold("fold_a", "case_a", ["case_b"])]
+
+    with pytest.raises(ValueError, match="prepared_tests must match test_cases"):
+        run_case_fold_optuna_study(
+            cases={},
+            folds=folds,
+            output_root=tmp_path,
+            n_trials=1,
+            test_cases={
+                "case_test": CaseFoldTuningCase(
+                    "case_test",
+                    tmp_path / "unused_source",
+                    tmp_path / "unused_gold.csv",
+                )
+            },
+            prepared_tests={"case_other": _prepared_case_stub(tmp_path, "case_other")},
+            prepared_by_fold=_prepared_by_fold_stub(tmp_path, folds),
         )
 
 
@@ -1366,6 +1487,185 @@ def test_case_fold_study_writes_best_params_and_uses_persistent_storage(
     }
 
 
+def test_case_fold_study_runs_final_holdout_for_trusted_best_trial(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    folds = [
+        CaseFoldTuningFold("fold_a", "case_a", ["case_b"]),
+        CaseFoldTuningFold("fold_b", "case_b", ["case_a"]),
+    ]
+    prepared = _prepared_by_fold_stub(tmp_path, folds)
+    prepared_tests = {"case_test": _prepared_case_stub(tmp_path, "case_test")}
+    train_sources_seen: list[list[str]] = []
+    calls: list[tuple[str, str]] = []
+
+    def fake_runner(
+        fold: CaseFoldTuningFold,
+        _prepared_runs: dict,
+        _trial_fold_dir: Path,
+        _params: dict,
+        _match_threshold: float,
+        _enable_shap: bool,
+        _trial_number: int,
+    ) -> dict[str, Any]:
+        return _fold_row(fold.name, 0.8)
+
+    def fake_train_and_save_fold_model(
+        sources: list[FoldTrainingSource],
+        _model_dir: Path,
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        train_sources_seen.append([source.case_name for source in sources])
+        return {
+            "training_metadata": {
+                "source_count": len(sources),
+                "labeled_row_count": 12,
+                "positive_rate": 0.5,
+            }
+        }
+
+    def fake_scoring(data_dir: Path, run_id: str, **_kwargs: Any) -> None:
+        calls.append(("scoring", Path(data_dir).name))
+        _write_dummy_artifact(get_scored_pairs_output_path(data_dir, run_id), b"scored")
+
+    def fake_resolution(data_dir: Path, run_id: str, **_kwargs: Any) -> dict[str, Any]:
+        calls.append(("resolution", Path(data_dir).name))
+        _write_dummy_artifact(
+            get_resolved_entities_output_path(data_dir, run_id),
+            b"resolved",
+        )
+        return {"cluster_count": 2}
+
+    def fake_evaluation(
+        data_dir: Path,
+        run_id: str,
+        _gold_path: Path,
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        calls.append(("evaluation", Path(data_dir).name))
+        _write_dummy_artifact(get_evaluation_report_path(data_dir, run_id), b"report")
+        return _fake_evaluation_report_with_score(0.8)
+
+    monkeypatch.setattr(
+        fold_tuning,
+        "train_and_save_fold_model",
+        fake_train_and_save_fold_model,
+    )
+    monkeypatch.setattr(matching_run, "run_scoring", fake_scoring)
+    monkeypatch.setattr(resolution_run, "run_resolution", fake_resolution)
+    monkeypatch.setattr(fold_tuning, "run_evaluation", fake_evaluation)
+
+    summary = run_case_fold_optuna_study(
+        cases={},
+        folds=folds,
+        output_root=tmp_path,
+        n_trials=1,
+        prepared_by_fold=prepared,
+        prepared_tests=prepared_tests,
+        test_cases={
+            "case_test": CaseFoldTuningCase(
+                "case_test",
+                tmp_path / "unused_source",
+                tmp_path / "unused_gold.csv",
+            )
+        },
+        fold_runner=fake_runner,
+    )
+    artifact = json.loads(
+        (tmp_path / CASE_FOLD_BEST_PARAMS_FILENAME).read_text(encoding="utf-8")
+    )
+    trial_summary = json.loads(
+        (tmp_path / "trials" / "trial_0000" / "trial_summary.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert train_sources_seen == [["case_b", "case_a"]]
+    assert calls == [
+        ("scoring", "case_test"),
+        ("resolution", "case_test"),
+        ("evaluation", "case_test"),
+    ]
+    assert summary["final_test"]["status"] == "completed"
+    assert summary["final_test"]["test_aggregate"] == pytest.approx(0.8)
+    assert artifact["test_cases"] == ["case_test"]
+    assert artifact["test_aggregate"] == pytest.approx(0.8)
+    assert artifact["test_per_case"]["case_test"]["bcubed_recall"] == pytest.approx(0.8)
+    assert artifact["test_match_threshold"]
+    assert set(artifact["test_resolution_thresholds"]) == {
+        RESOLUTION_KEEP_THRESHOLD_PARAM,
+        RESOLUTION_NEUTRAL_THRESHOLD_PARAM,
+    }
+    assert trial_summary["final_test"]["test_aggregate"] == pytest.approx(0.8)
+
+
+def test_case_fold_study_cleans_final_holdout_artifacts_on_failure(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    folds = [CaseFoldTuningFold("fold_a", "case_a", ["case_b"])]
+    prepared_tests = {"case_test": _prepared_case_stub(tmp_path, "case_test")}
+    stale_best_path = tmp_path / CASE_FOLD_BEST_PARAMS_FILENAME
+    _write_dummy_artifact(stale_best_path, b"stale")
+
+    def fake_runner(
+        fold: CaseFoldTuningFold,
+        _prepared_runs: dict,
+        _trial_fold_dir: Path,
+        _params: dict,
+        _match_threshold: float,
+        _enable_shap: bool,
+        _trial_number: int,
+    ) -> dict[str, Any]:
+        return _fold_row(fold.name, 0.8)
+
+    def fake_train_and_save_fold_model(
+        _sources: list[FoldTrainingSource],
+        _model_dir: Path,
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        return {
+            "training_metadata": {
+                "source_count": 2,
+                "labeled_row_count": 12,
+                "positive_rate": 0.5,
+            }
+        }
+
+    def failing_scoring(data_dir: Path, run_id: str, **_kwargs: Any) -> None:
+        _write_dummy_artifact(get_scored_pairs_output_path(data_dir, run_id), b"partial")
+        raise RuntimeError("scoring failed")
+
+    monkeypatch.setattr(
+        fold_tuning,
+        "train_and_save_fold_model",
+        fake_train_and_save_fold_model,
+    )
+    monkeypatch.setattr(matching_run, "run_scoring", failing_scoring)
+
+    with pytest.raises(RuntimeError, match="scoring failed"):
+        run_case_fold_optuna_study(
+            cases={},
+            folds=folds,
+            output_root=tmp_path,
+            n_trials=1,
+            prepared_by_fold=_prepared_by_fold_stub(tmp_path, folds),
+            prepared_tests=prepared_tests,
+            test_cases={
+                "case_test": CaseFoldTuningCase(
+                    "case_test",
+                    tmp_path / "unused_source",
+                    tmp_path / "unused_gold.csv",
+                )
+            },
+            fold_runner=fake_runner,
+        )
+
+    assert not stale_best_path.exists()
+    assert not (tmp_path / FINAL_TEST_DIRNAME / "current").exists()
+
+
 def test_case_fold_study_writes_readable_tuning_reports(tmp_path: Path) -> None:
     folds = [
         CaseFoldTuningFold("fold_a", "case_a", ["case_b"]),
@@ -1435,6 +1735,8 @@ def test_case_fold_study_writes_readable_tuning_reports(tmp_path: Path) -> None:
     assert "Pairwise beta" in report
     assert "Keep threshold" in report
     assert "Neutral threshold" in report
+    assert "Final Hold-Out Test" in report
+    assert "No final hold-out test cases configured." in report
     assert "B-cubed R" in report
     assert "Pairwise P" in report
 
@@ -1474,6 +1776,50 @@ def test_case_fold_study_recall_guardrail_withholds_best_params(
     assert summary["successful_trial_count"] == 0
     assert not (tmp_path / CASE_FOLD_BEST_PARAMS_FILENAME).exists()
     assert (tmp_path / FOLD_TUNING_TRIALS_FILENAME).exists()
+
+
+def test_case_fold_study_skips_final_holdout_without_trusted_best(
+    tmp_path: Path,
+) -> None:
+    folds = [CaseFoldTuningFold("fold_a", "case_a", ["case_b"])]
+    stale_path = tmp_path / FINAL_TEST_DIRNAME / "current" / "stale.json"
+    _write_dummy_artifact(stale_path, b"stale")
+
+    def low_recall_runner(
+        fold: CaseFoldTuningFold,
+        _prepared_runs: dict,
+        _trial_fold_dir: Path,
+        _params: dict,
+        _match_threshold: float,
+        _enable_shap: bool,
+        _trial_number: int,
+    ) -> dict[str, Any]:
+        row = _fold_row(fold.name, 0.7)
+        row["pairwise_recall"] = 0.2
+        return row
+
+    summary = run_case_fold_optuna_study(
+        cases={},
+        folds=folds,
+        output_root=tmp_path,
+        n_trials=1,
+        min_pairwise_recall=0.8,
+        test_cases={
+            "case_test": CaseFoldTuningCase(
+                "case_test",
+                tmp_path / "unused_source",
+                tmp_path / "unused_gold.csv",
+            )
+        },
+        prepared_by_fold=_prepared_by_fold_stub(tmp_path, folds),
+        fold_runner=low_recall_runner,
+    )
+
+    assert summary["status"] == "completed_no_trusted_best_params"
+    assert summary["final_test"]["status"] == "skipped_no_trusted_best"
+    assert summary["final_test"]["stale_final_test_artifacts_removed"] is True
+    assert not (tmp_path / FINAL_TEST_DIRNAME).exists()
+    assert not (tmp_path / CASE_FOLD_BEST_PARAMS_FILENAME).exists()
 
 
 def test_case_fold_study_pairwise_recall_guardrail_accepts_all_passing_folds(
@@ -1617,6 +1963,68 @@ def test_case_fold_tuning_runner_help_bootstraps_repo_root() -> None:
     assert "--keep-trial-artifacts" in result.stdout
 
 
+def test_runner_config_accepts_optional_test_cases(tmp_path: Path) -> None:
+    for case_name in ["case_a", "case_b", "case_test"]:
+        _write_runner_case(tmp_path, case_name)
+    config_path = tmp_path / "case_folds.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "source_root": str(tmp_path / "raw"),
+                "cases": {"case_a": {}, "case_b": {}},
+                "test_cases": [{"name": "case_test"}],
+                "folds": [
+                    {
+                        "name": "fold_a",
+                        "held_out_case": "case_a",
+                        "train_cases": ["case_b"],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    cases, folds, test_cases = _load_runner_config(config_path)
+
+    assert list(cases) == ["case_a", "case_b"]
+    assert [fold.name for fold in folds] == ["fold_a"]
+    assert list(test_cases) == ["case_test"]
+    assert test_cases["case_test"].case_root == (tmp_path / "raw" / "case_test")
+
+
+@pytest.mark.parametrize(
+    "payload_update",
+    [
+        {"test_cases": [{"name": "case_a"}]},
+        {"test_cases": [{"name": "case_b"}]},
+    ],
+)
+def test_runner_config_rejects_test_case_overlap(
+    tmp_path: Path,
+    payload_update: dict[str, Any],
+) -> None:
+    for case_name in ["case_a", "case_b"]:
+        _write_runner_case(tmp_path, case_name)
+    config_path = tmp_path / "case_folds.json"
+    payload = {
+        "source_root": str(tmp_path / "raw"),
+        "cases": {"case_a": {}, "case_b": {}},
+        "folds": [
+            {
+                "name": "fold_a",
+                "held_out_case": "case_a",
+                "train_cases": ["case_b"],
+            }
+        ],
+    }
+    payload.update(payload_update)
+    config_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="test_cases must not overlap"):
+        _load_runner_config(config_path)
+
+
 def test_case_fold_study_reuses_matching_persistent_fingerprint(
     tmp_path: Path,
 ) -> None:
@@ -1732,6 +2140,64 @@ def test_case_fold_study_rejects_changed_case_inputs_for_same_folds(
                 folds,
                 identity_tag="changed",
             ),
+            fold_runner=fake_runner,
+        )
+
+
+def test_case_fold_study_rejects_changed_test_case_list(
+    tmp_path: Path,
+) -> None:
+    folds = [CaseFoldTuningFold("fold_a", "case_a", ["case_b"])]
+    storage = f"sqlite:///{tmp_path / 'optuna.db'}"
+    prepared = _prepared_by_fold_stub(tmp_path, folds)
+
+    def fake_runner(
+        fold: CaseFoldTuningFold,
+        _prepared_runs: dict,
+        _trial_fold_dir: Path,
+        _params: dict,
+        _match_threshold: float,
+        _enable_shap: bool,
+        _trial_number: int,
+    ) -> dict[str, Any]:
+        return _fold_row(fold.name, 0.4)
+
+    run_case_fold_optuna_study(
+        cases={},
+        folds=folds,
+        output_root=tmp_path,
+        n_trials=1,
+        min_pairwise_recall=0.8,
+        storage=storage,
+        study_name="case_fold_demo",
+        test_cases={
+            "case_test": CaseFoldTuningCase(
+                "case_test",
+                tmp_path / "unused_source",
+                tmp_path / "unused_gold.csv",
+            )
+        },
+        prepared_by_fold=prepared,
+        fold_runner=fake_runner,
+    )
+
+    with pytest.raises(ValueError, match="fingerprint"):
+        run_case_fold_optuna_study(
+            cases={},
+            folds=folds,
+            output_root=tmp_path,
+            n_trials=1,
+            min_pairwise_recall=0.8,
+            storage=storage,
+            study_name="case_fold_demo",
+            test_cases={
+                "case_other": CaseFoldTuningCase(
+                    "case_other",
+                    tmp_path / "unused_source",
+                    tmp_path / "unused_gold.csv",
+                )
+            },
+            prepared_by_fold=prepared,
             fold_runner=fake_runner,
         )
 
