@@ -6,7 +6,7 @@ triage interface over a completed resolution run.
 ## Run Command
 
 Run from the repository root in the same Python environment used for evaluation
-(see *Environment Setup* in `README-evaluation2.md`). Currently there is no
+(see *Environment Setup* in `README-evaluation.md`). Currently there is no
 Docker image; launch Streamlit directly.
 
 ```bash

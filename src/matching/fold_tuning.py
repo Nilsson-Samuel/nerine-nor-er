@@ -2,9 +2,10 @@
 
 The regular tuning path optimizes pair labels inside one scoring run. This
 module keeps a separate, case-aware objective: each trial trains a fold model,
-scores the held-out case, runs resolution, and averages final clustering
-pairwise F-beta across folds.
-Make sure you have enough cases for to ensure a reliable generalized model.
+scores the held-out case, tunes matching/resolution thresholds, runs resolution,
+and averages final clustering pairwise F-beta across folds.
+
+Make sure there are enough cases to estimate generalization reliably.
 """
 
 from __future__ import annotations
