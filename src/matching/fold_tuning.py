@@ -1681,7 +1681,7 @@ def run_case_fold_optuna_study(
             keep_trial_artifacts=keep_trial_artifacts,
         ),
         n_trials=n_trials,
-        show_progress_bar=False,
+        show_progress_bar=True,
     )
 
     completed_trials = sum(
