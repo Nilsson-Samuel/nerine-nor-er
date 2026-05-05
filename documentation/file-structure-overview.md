@@ -193,6 +193,7 @@ Tests are summarized here instead of listed file by file.
 |------|---------|
 | `tests/ingestion/` | Validates discovery, extraction, normalization, chunking, and ingestion-stage contracts |
 | `tests/extraction/` | Covers NER, regex supplements, normalization, deduplication, context, and writer behavior |
+| `tests/blocking/` | Covers exact, FAISS, phonetic, MinHash, candidate merging, and blocking writer behavior |
 | `tests/matching/` | Covers feature loading, feature generation, training, tuning, scoring, and SHAP output |
 | `tests/resolution/` | Covers thresholds, clustering behavior, confidence routing, and final outputs |
 | `tests/hitl/` | Covers query helpers, diagnostics loading, filters, and cluster-inspector support logic |
