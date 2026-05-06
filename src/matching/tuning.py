@@ -198,7 +198,7 @@ def run_optuna_study(
             threshold=threshold,
         ),
         n_trials=n_trials,
-        show_progress_bar=False,
+        show_progress_bar=True,
     )
     completed_trials = sum(trial.value is not None for trial in study.trials)
     best_value = float(study.best_value)

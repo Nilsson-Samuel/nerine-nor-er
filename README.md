@@ -85,10 +85,9 @@ src/
   synthetic/       Synthetic data generation for early testing
   shared/          Schemas, validation, config, and common utilities
   pipeline.py      End-to-end orchestration
-tests/
+tests/             Pytest suite covering pipeline stages, contracts and evaluation
 data/
-models/
-documentation/     Evaluation, HITL, annotation, and run guides
+documentation/     Repo overview, evaluation, HITL, annotation, and run guides
 ```
 
 ## Evaluation
@@ -106,7 +105,9 @@ Further evaluation on restricted partner-held material is planned in near future
 
 More detailed project notes and run guides are available in `documentation/`:
 
-- `README-evaluation.md` for evaluation, case-fold runs, Optuna tuning, and metric interpretation
+- `file-structure-overview.md` for a reader-friendly repository map.
+
+- `README-evaluation.md` for evaluation, case-fold runs, Optuna tuning, and metric interpretation.
 - `README-hitl.md` for running and troubleshooting the human-in-the-loop Streamlit review app. 
 - `README-annotation-tooling.md` for annotation workflow. 
 
