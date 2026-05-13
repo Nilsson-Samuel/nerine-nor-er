@@ -11,8 +11,12 @@ data/raw/
 data/synthetic/
 data/runs/
 data/mock_handoff/
+data/lightgbm_kripos_*/
 models/*.lgb
 *.npy
+
+# Handoff bundles produced by scripts/build_kripos_handoff.sh
+dist/
 
 # IDE
 .vscode/

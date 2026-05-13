@@ -1,0 +1,54 @@
+# Two services share the same image:
+#   - hitl:     Streamlit cluster-triage UI on http://localhost:8501
+#   - pipeline: one-shot CLI run, started with `docker compose run --rm pipeline ...`
+#
+# Bind mounts are intentionally granular: only ./data/raw and
+# ./data/processed/runs are exposed from the host. The tuned LightGBM model
+# baked into the image at /app/data/processed/reranker_model.txt must stay
+# visible, so we do NOT mount ./data over /app/data wholesale. The HF cache
+# is also baked into the image at build time.
+
+services:
+  hitl:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: nerine:latest
+    container_name: nerine-hitl
+    ports:
+      - "8501:8501"
+    environment:
+      NERINE_DATA_DIR: /app/data/processed
+    volumes:
+      - ./data/raw:/app/data/raw
+      - ./data/processed/runs:/app/data/processed/runs
+    command:
+      - streamlit
+      - run
+      - src/hitl/streamlit_app.py
+      - --server.port=8501
+      - --server.address=0.0.0.0
+      - --server.headless=true
+    restart: unless-stopped
+
+  pipeline:
+    image: nerine:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: nerine-pipeline
+    profiles: ["run"]   # not started by `docker compose up`; use `compose run` instead.
+    environment:
+      NERINE_DATA_DIR: /app/data/processed
+    volumes:
+      - ./data/raw:/app/data/raw
+      - ./data/processed/runs:/app/data/processed/runs
+    # Override at invocation, e.g.
+    #   docker compose run --rm pipeline \
+    #     python -m src.pipeline --case-root /app/data/raw/my_case \
+    #                            --data-dir /app/data/processed
+    command:
+      - python
+      - -m
+      - src.pipeline
+      - --help
