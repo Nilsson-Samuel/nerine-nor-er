@@ -1,0 +1,29 @@
+.git
+.github
+.gitlab-ci.yml
+.venv
+venv
+__pycache__
+**/__pycache__
+*.pyc
+*.pyo
+*.egg-info
+.pytest_cache
+.cache
+.ipynb_checkpoints
+.vscode
+.idea
+.DS_Store
+
+# Keep the image small: bind-mount these at runtime instead of baking them in.
+data/processed
+data/raw
+data/runs
+data/mock_handoff
+models/*.lgb
+*.npy
+
+# Tests and docs are not needed inside the runtime image.
+tests
+documentation
+assets

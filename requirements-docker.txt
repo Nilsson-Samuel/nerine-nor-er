@@ -1,0 +1,36 @@
+# Runtime dependencies for the Docker image.
+# Extends requirements-ci.txt with packages needed for the full pipeline
+# (transformers/torch via NER) and the Streamlit HITL app, but without the
+# test runner.
+
+numpy==1.26.4
+polars==1.38.1
+pyarrow==22.0.0
+duckdb==1.4.4
+networkx==3.5
+Metaphone==0.6
+RapidFuzz==3.14.3
+PyMuPDF==1.27.1
+python-docx==1.2.0
+langchain-text-splitters==1.1.1
+ftfy==6.3.1
+lightgbm==4.6.0
+scikit-learn==1.8.0
+optuna==4.7.0
+faiss-cpu==1.9.0
+datasketch>=1.6.0
+sentence-transformers>=2.2.0
+
+# Pulled transitively by sentence-transformers, pinned-friendly here so the
+# NER pipeline import in src/extraction/ner.py is explicit.
+transformers>=4.41,<5
+
+# CPU-only torch wheel; sentence-transformers requires it. Pinning loosely so
+# pip resolves a wheel matching the CPython 3.12 base image.
+torch>=2.2,<3
+
+# Pipeline progress bar (graceful fallback if missing, but nicer to have).
+tqdm>=4.66
+
+# HITL UI.
+streamlit>=1.36,<2
