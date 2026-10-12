@@ -41,3 +41,16 @@ BASE_CONFIDENCE_REVIEW_THRESHOLD = 0.50
 # output can support low-HITL and more review-heavy operation without changing
 # clustering.
 ROUTING_PROFILE = "quick_low_hitl"
+
+
+# HITL display defaults. These only affect what the review interface shows and
+# can be adjusted per session in the sidebar; they never change resolution.
+
+# Lowest pair score shown as a merge candidate between two different clusters.
+# Set below KEEP_SCORE_THRESHOLD so reviewers also see pairs pruned before
+# clustering.
+HITL_CANDIDATE_MIN_SCORE = 0.30
+
+# Characters shown on each side of a mention in the context viewer. Context is
+# rebuilt from the run's chunks, so it can extend past chunk boundaries.
+HITL_CONTEXT_WINDOW_CHARS = 300

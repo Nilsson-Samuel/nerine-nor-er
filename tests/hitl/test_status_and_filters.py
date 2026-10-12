@@ -13,7 +13,15 @@ from src.hitl.queries import (
     filter_by_bucket,
     load_cluster_frame,
 )
-from src.hitl.status import diagnostics_sidebar_summary, load_diagnostics_safe
+from src.hitl.status import (
+    INSTALLED_MODEL_METADATA_FILENAME,
+    diagnostics_sidebar_summary,
+    load_diagnostics_safe,
+    load_installed_model_version,
+    load_run_model_version,
+    model_version_warning,
+)
+from src.matching.writer import get_scoring_metadata_path
 from src.shared.paths import _encode_run_id_path_segment
 from src.resolution.writer import (
     CLUSTERS_FILENAME,
@@ -194,3 +202,58 @@ def test_filter_returns_empty_for_nonexistent_bucket(tmp_path: Path) -> None:
     frame = load_cluster_frame(tmp_path, "filter_run")
     filtered = filter_by_bucket(frame, "balanced_hitl", "defer")
     assert filtered.is_empty()
+
+
+# ── Scoring model version ─────────────────────────────────────────────────────
+
+
+def _write_json(path: Path, payload: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def test_run_model_version_read_from_scoring_metadata(tmp_path: Path) -> None:
+    _write_json(
+        get_scoring_metadata_path(tmp_path, "model_run"),
+        {"model_version": "baseline-synthetic-v1", "run_id": "model_run"},
+    )
+    assert load_run_model_version(tmp_path, "model_run") == "baseline-synthetic-v1"
+
+
+def test_installed_model_version_read_from_data_dir(tmp_path: Path) -> None:
+    _write_json(
+        tmp_path / INSTALLED_MODEL_METADATA_FILENAME,
+        {"model_version": "lightgbm_kripos_v2"},
+    )
+    assert load_installed_model_version(tmp_path) == "lightgbm_kripos_v2"
+
+
+@pytest.mark.parametrize("payload", [None, "{not json", ["model_version"], {}])
+def test_model_versions_none_when_missing_or_malformed(
+    tmp_path: Path, payload: Any,
+) -> None:
+    if payload is not None:
+        path = tmp_path / INSTALLED_MODEL_METADATA_FILENAME
+        if isinstance(payload, str):
+            path.write_text(payload, encoding="utf-8")
+        else:
+            _write_json(path, payload)
+    assert load_installed_model_version(tmp_path) is None
+    assert load_run_model_version(tmp_path, "missing_run") is None
+
+
+def test_model_version_warning_names_both_models() -> None:
+    warning = model_version_warning("baseline-synthetic-v1", "lightgbm_kripos_v2")
+    assert warning is not None
+    assert "baseline-synthetic-v1" in warning
+    assert "lightgbm_kripos_v2" in warning
+
+
+@pytest.mark.parametrize(
+    ("run_version", "installed_version"),
+    [("same", "same"), (None, "installed"), ("run", None), (None, None)],
+)
+def test_no_model_version_warning_when_matching_or_unknown(
+    run_version: str | None, installed_version: str | None,
+) -> None:
+    assert model_version_warning(run_version, installed_version) is None

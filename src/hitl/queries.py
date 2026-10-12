@@ -19,6 +19,8 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from src.matching.writer import get_scored_pairs_output_path
+from src.resolution.clustering import MIN_OBJECTIVE_GAIN
+from src.shared.config import KEEP_SCORE_THRESHOLD, OBJECTIVE_NEUTRAL_THRESHOLD
 from src.shared.paths import (
     RESOLUTION_STAGE_DIRNAME,
     RUN_OUTPUTS_DIRNAME,
@@ -73,6 +75,7 @@ _MEMBER_COLUMNS = [
     "chunk_id",
     "char_start",
     "char_end",
+    "positions",
 ]
 _EDGE_COLUMNS = ["entity_id_a", "entity_id_b", "score", "blocking_source", "shap_top5"]
 _PARQUET_READ_EXCEPTIONS = (OSError, pa.ArrowInvalid, pl.exceptions.PolarsError)
@@ -312,24 +315,20 @@ def load_cluster_member_ids(
     return resolved["entity_id"].to_list()
 
 
-def load_cluster_members(
+def load_entities_by_id(
     data_dir: Path,
     run_id: str,
-    cluster_id: str,
-    member_ids: list[str] | None = None,
+    entity_ids: list[str],
 ) -> pl.DataFrame:
-    """Load members of one cluster by reading only matching entity rows.
+    """Load entity rows for the given IDs from entities.parquet.
 
     Returns a DataFrame with entity-level detail: entity_id, normalized, text,
-    type, doc_id, count, context, chunk_id, char_start, char_end.
-    Returns an empty frame if the parquet files are missing or unreadable.
+    type, doc_id, count, context, chunk_id, char_start, char_end, positions.
+    Returns an empty frame if the parquet file is missing or unreadable.
     """
     entities_path = get_extraction_run_output_dir(data_dir, run_id) / "entities.parquet"
 
-    if member_ids is None:
-        member_ids = load_cluster_member_ids(data_dir, run_id, cluster_id)
-
-    if not member_ids or not entities_path.exists():
+    if not entity_ids or not entities_path.exists():
         return pl.DataFrame()
 
     try:
@@ -342,15 +341,30 @@ def load_cluster_members(
                 columns=keep_cols,
                 filters=[
                     ("run_id", "==", run_id),
-                    ("entity_id", "in", member_ids),
+                    ("entity_id", "in", entity_ids),
                 ],
             )
         )
     except _PARQUET_READ_EXCEPTIONS as exc:
-        logger.warning("Could not read parquet for members: %s", exc)
+        logger.warning("Could not read parquet for entities: %s", exc)
         return pl.DataFrame()
 
     return entities.sort("entity_id")
+
+
+def load_cluster_members(
+    data_dir: Path,
+    run_id: str,
+    cluster_id: str,
+    member_ids: list[str] | None = None,
+) -> pl.DataFrame:
+    """Load members of one cluster by reading only matching entity rows.
+
+    Returns an empty frame if the parquet files are missing or unreadable.
+    """
+    if member_ids is None:
+        member_ids = load_cluster_member_ids(data_dir, run_id, cluster_id)
+    return load_entities_by_id(data_dir, run_id, member_ids)
 
 
 def load_cluster_edges(
@@ -466,3 +480,230 @@ def format_shap_reasons(shap_top5: list[dict[str, float]] | None) -> str:
         val = entry.get("value", 0.0)
         parts.append(f"{feat} {val:+.3f}")
     return ", ".join(parts)
+
+
+# ── Merge candidates across clusters ─────────────────────────────────────────
+
+# Why a scored pair ended up in two different clusters, in pipeline order.
+UNMERGED_PRUNED = "pruned: below keep threshold"
+UNMERGED_WEAK = "weak: below neutral point"
+UNMERGED_SPLIT = "split: clustering kept apart"
+
+_CROSS_PAIR_SCHEMA: dict[str, pl.DataType] = {
+    "cluster_id": pl.Utf8,
+    "entity_id": pl.Utf8,
+    "candidate_cluster_id": pl.Utf8,
+    "candidate_entity_id": pl.Utf8,
+    "score": pl.Float64,
+    "blocking_source": pl.Utf8,
+}
+
+
+def resolve_run_thresholds(diagnostics: dict[str, Any] | None) -> tuple[float, float]:
+    """Return the run's (keep, neutral) thresholds, falling back to config.
+
+    Runs record the thresholds they were resolved with in their diagnostics.
+    Preferring those keeps candidate explanations correct when config has
+    changed since the run.
+    """
+    thresholds = (diagnostics or {}).get("thresholds") or {}
+    keep = thresholds.get("keep_score_threshold", KEEP_SCORE_THRESHOLD)
+    neutral = thresholds.get("objective_neutral_threshold", OBJECTIVE_NEUTRAL_THRESHOLD)
+    return float(keep), float(neutral)
+
+
+def load_entity_cluster_ids(data_dir: Path, run_id: str) -> pl.DataFrame:
+    """Load the entity_id → cluster_id assignment for every resolved entity."""
+    empty = pl.DataFrame(schema={"entity_id": pl.Utf8, "cluster_id": pl.Utf8})
+    resolved_path = get_resolved_entities_output_path(data_dir, run_id)
+    if not resolved_path.exists():
+        return empty
+
+    try:
+        return pl.from_arrow(
+            pq.read_table(resolved_path, columns=["entity_id", "cluster_id"])
+        )
+    except _PARQUET_READ_EXCEPTIONS as exc:
+        logger.warning("Could not read parquet for cluster assignments: %s", exc)
+        return empty
+
+
+def load_cross_cluster_pairs(
+    data_dir: Path,
+    run_id: str,
+    min_score: float,
+) -> pl.DataFrame:
+    """Load scored pairs at or above min_score whose entities sit in different clusters.
+
+    Each pair is returned twice, once from each side, so filtering on
+    ``cluster_id`` yields every outside entity that was scored against that
+    cluster. Returns columns: cluster_id, entity_id, candidate_cluster_id,
+    candidate_entity_id, score, blocking_source.
+    """
+    empty = pl.DataFrame(schema=_CROSS_PAIR_SCHEMA)
+    scored_path = get_scored_pairs_output_path(data_dir, run_id)
+    if not scored_path.exists():
+        return empty
+
+    assignments = load_entity_cluster_ids(data_dir, run_id)
+    if assignments.is_empty():
+        return empty
+
+    try:
+        keep_cols = _available_columns(
+            scored_path, ["entity_id_a", "entity_id_b", "score", "blocking_source"]
+        )
+        scored = pl.from_arrow(
+            pq.read_table(
+                scored_path,
+                columns=keep_cols,
+                filters=[("score", ">=", float(min_score))],
+            )
+        )
+    except _PARQUET_READ_EXCEPTIONS as exc:
+        logger.warning("Could not read parquet for cross-cluster pairs: %s", exc)
+        return empty
+
+    if "blocking_source" not in scored.columns:
+        scored = scored.with_columns(pl.lit(None, dtype=pl.Utf8).alias("blocking_source"))
+
+    pairs = (
+        scored.join(
+            assignments.rename({"entity_id": "entity_id_a", "cluster_id": "cluster_id_a"}),
+            on="entity_id_a",
+        )
+        .join(
+            assignments.rename({"entity_id": "entity_id_b", "cluster_id": "cluster_id_b"}),
+            on="entity_id_b",
+        )
+        .filter(pl.col("cluster_id_a") != pl.col("cluster_id_b"))
+        .with_columns(pl.col("score").cast(pl.Float64))
+    )
+
+    def _oriented(side: str, other: str) -> pl.DataFrame:
+        return pairs.select(
+            pl.col(f"cluster_id_{side}").alias("cluster_id"),
+            pl.col(f"entity_id_{side}").alias("entity_id"),
+            pl.col(f"cluster_id_{other}").alias("candidate_cluster_id"),
+            pl.col(f"entity_id_{other}").alias("candidate_entity_id"),
+            "score",
+            "blocking_source",
+        )
+
+    return pl.concat([_oriented("a", "b"), _oriented("b", "a")])
+
+
+def build_candidate_table(
+    pairs: pl.DataFrame,
+    entities: pl.DataFrame,
+    cluster_frame: pl.DataFrame,
+    route_column: str,
+    keep_threshold: float,
+    neutral_threshold: float,
+) -> pl.DataFrame:
+    """Attach entity text, candidate-cluster routing and an unmerged reason to pairs.
+
+    Args:
+        pairs: Rows from load_cross_cluster_pairs.
+        entities: Entity rows covering both sides of every pair.
+        cluster_frame: Cluster DataFrame from load_cluster_frame.
+        route_column: Cluster frame column holding the active profile's bucket.
+        keep_threshold: Score below which a pair never reached clustering.
+        neutral_threshold: Score above which a retained pair voted to merge.
+
+    Returns:
+        One row per (entity, outside candidate), strongest score first, with
+        ``candidate_rank`` numbering the candidates within each cluster.
+    """
+    if pairs.is_empty():
+        return pl.DataFrame()
+
+    entity_cols = [c for c in ("entity_id", "text", "type", "doc_id", "context")
+                   if c in entities.columns]
+    details = entities.select(entity_cols)
+    candidate_details = details.rename(
+        {c: f"candidate_{c}" for c in entity_cols}
+    )
+    candidate_clusters = cluster_frame.select(
+        pl.col("cluster_id").alias("candidate_cluster_id"),
+        pl.col("canonical_name").alias("candidate_canonical_name"),
+        pl.col("cluster_size").alias("candidate_cluster_size"),
+        pl.col(route_column).alias("candidate_route"),
+    )
+
+    unmerged_reason = (
+        pl.when(pl.col("score") < keep_threshold)
+        .then(pl.lit(UNMERGED_PRUNED))
+        # Mirrors score_to_objective_weight: only a positive weight votes to merge.
+        .when(pl.col("score") - neutral_threshold > MIN_OBJECTIVE_GAIN)
+        .then(pl.lit(UNMERGED_SPLIT))
+        .otherwise(pl.lit(UNMERGED_WEAK))
+    )
+
+    return (
+        pairs.join(details, on="entity_id", how="left")
+        .join(candidate_details, on="candidate_entity_id", how="left")
+        .join(candidate_clusters, on="candidate_cluster_id", how="left")
+        .with_columns(
+            unmerged_reason.alias("unmerged_reason"),
+            pl.col("score")
+            .rank("ordinal", descending=True)
+            .over("cluster_id")
+            .alias("candidate_rank"),
+        )
+        .sort(
+            ["score", "cluster_id", "entity_id", "candidate_entity_id"],
+            descending=[True, False, False, False],
+        )
+    )
+
+
+def load_candidate_table(
+    data_dir: Path,
+    run_id: str,
+    cluster_frame: pl.DataFrame,
+    profile: str,
+    min_score: float,
+    thresholds: tuple[float, float],
+) -> pl.DataFrame:
+    """Load every cross-cluster merge candidate at or above min_score for one run.
+
+    Args:
+        data_dir: Root data directory containing per-run outputs.
+        run_id: Pipeline run identifier.
+        cluster_frame: Cluster DataFrame from load_cluster_frame.
+        profile: Routing profile whose buckets label the candidate clusters.
+        min_score: Lowest pair score to include.
+        thresholds: The run's (keep, neutral) thresholds, see resolve_run_thresholds.
+
+    Returns:
+        Candidate table from build_candidate_table, or an empty frame.
+    """
+    pairs = load_cross_cluster_pairs(data_dir, run_id, min_score)
+    if pairs.is_empty():
+        return pl.DataFrame()
+
+    entity_ids = pl.concat([pairs["entity_id"], pairs["candidate_entity_id"]]).unique()
+    entities = load_entities_by_id(data_dir, run_id, entity_ids.to_list())
+    keep_threshold, neutral_threshold = thresholds
+    return build_candidate_table(
+        pairs,
+        entities,
+        cluster_frame,
+        _route_column_for_profile(profile),
+        keep_threshold,
+        neutral_threshold,
+    )
+
+
+def top_candidate_scores(candidates: pl.DataFrame) -> pl.DataFrame:
+    """Return each cluster's strongest outside candidate score.
+
+    Gives keep_separate clusters, whose base confidence is always 0, a score
+    that says how close they came to being merged.
+    """
+    if candidates.is_empty():
+        return pl.DataFrame(schema={"cluster_id": pl.Utf8, "top_candidate_score": pl.Float64})
+    return candidates.group_by("cluster_id").agg(
+        pl.col("score").max().alias("top_candidate_score")
+    )

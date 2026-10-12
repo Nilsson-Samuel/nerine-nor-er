@@ -151,6 +151,7 @@ Provides the human-review interface and query helpers for inspecting uncertain r
 | `src/hitl/__init__.py` | Package marker for HITL tooling |
 | `src/hitl/queries.py` | DuckDB-facing query helpers for cluster and run inspection |
 | `src/hitl/status.py` | Diagnostics loading and sidebar summary helpers |
+| `src/hitl/context.py` | Rebuilds document text from chunks for wide mention context windows |
 | `src/hitl/cluster_view.py` | Rendering logic for cluster inspection in the Streamlit app |
 | `src/hitl/streamlit_app.py` | Main Streamlit interface for review and cluster triage |
 
