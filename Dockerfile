@@ -2,7 +2,8 @@
 # Rough single-stage image for the NERINE pipeline + Streamlit HITL app.
 # CPU-only. Pre-downloads HuggingFace models at build time for offline use.
 
-FROM python:3.12-slim
+# Patch version pinned to match the image handed to Kripos on 2026-05-12.
+FROM python:3.12.13-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -10,7 +11,6 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     PYTHONPATH=/app:/app/src \
     HF_HOME=/opt/hf-cache \
-    TRANSFORMERS_OFFLINE=0 \
     NERINE_DATA_DIR=/app/data/processed
 
 # libgomp1: required by lightgbm, faiss, and torch (OpenMP).
@@ -27,15 +27,23 @@ RUN apt-get update \
 WORKDIR /app
 
 # Install Python deps first so the layer caches across source edits.
-COPY requirements-docker.txt /app/requirements-docker.txt
+# constraints-docker.txt pins every package to the versions Kripos already
+# runs, so a rebuild does not silently change pipeline results.
+COPY requirements-docker.txt constraints-docker.txt /app/
 RUN pip install --upgrade pip \
-    && pip install -r /app/requirements-docker.txt
+    && pip install -r /app/requirements-docker.txt -c /app/constraints-docker.txt
 
 # Pre-download the NER and SBERT models into HF_HOME. This bakes ~1.5 GB into
 # the image so the running container does not need network access.
 COPY docker/preload_models.py /app/docker/preload_models.py
 RUN mkdir -p "${HF_HOME}" \
     && python /app/docker/preload_models.py
+
+# From here on, load models only from the baked cache. Without this the
+# libraries still try huggingface.co at runtime, and on a machine without
+# internet the blocking stage hangs on connection timeouts and then fails.
+ENV HF_HUB_OFFLINE=1 \
+    TRANSFORMERS_OFFLINE=1
 
 # Project source. Tests, docs, and large data dirs are excluded via .dockerignore.
 COPY src/ /app/src/

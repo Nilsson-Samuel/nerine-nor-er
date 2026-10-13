@@ -16,12 +16,14 @@ __pycache__
 .DS_Store
 
 # Keep the image small: bind-mount these at runtime instead of baking them in.
-data/processed
+# data/processed* also covers named run dirs such as data/processed-native.
+data/processed*
 data/raw
 data/runs
 data/mock_handoff
 models/*.lgb
-*.npy
+# A bare *.npy only matches the context root; ** reaches nested run dirs.
+**/*.npy
 
 # Tests and docs are not needed inside the runtime image.
 tests
