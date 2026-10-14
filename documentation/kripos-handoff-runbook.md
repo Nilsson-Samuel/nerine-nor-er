@@ -109,6 +109,49 @@ All artifacts land under `data/processed/runs/<encoded_run_id>/` on the host:
 The structured outputs are Parquet (open with DuckDB, Polars, pandas, or any
 modern data tool). The pipeline summary is plain JSON.
 
+## Updating to a new version
+
+A newer bundle replaces the Docker image only. Your case documents
+(`data/raw/`) and pipeline runs (`data/processed/runs/`) live on the host,
+outside the image, so the update does not touch them. Existing runs open in
+the new version without rerunning the pipeline.
+
+Run every step from the folder you already use for NERINE, the one that
+contains your `data/` folder:
+
+```bash
+# 1. Stop the HITL service (or press Ctrl+C in its terminal).
+docker compose down
+
+# 2. Copy the new bundle files into this folder, replacing the old ones:
+#    nerine-image.tar.gz, docker-compose.yml, RUNBOOK.md, SHA256SUMS
+#    Leave the data/ folder as it is.
+
+# 3. Verify the new files.
+sha256sum --check SHA256SUMS
+
+# 4. Load the new image. It replaces the previous nerine:latest.
+gunzip -c nerine-image.tar.gz | docker load
+
+# 5. Confirm the image is new: CREATED should show the bundle's build date.
+docker images nerine
+
+# 6. Start the HITL service. Compose recreates the container from the new image.
+docker compose up hitl
+```
+
+Do not unpack the new bundle into a separate folder and run it from there.
+`docker-compose.yml` finds your data through the relative paths `./data/raw`
+and `./data/processed/runs`, so a fresh folder has no runs and the UI reports
+"No resolution runs found".
+
+Once the new version works, you can free the disk space used by the old
+image (about 8 GB):
+
+```bash
+docker image prune
+```
+
 ## What the tuned model does and does not know
 
 The image ships with model
@@ -233,6 +276,24 @@ issue, the following two commands should both list `rid_<...>`:
 ls data/processed/runs/
 docker compose exec hitl ls /app/data/processed/runs/
 ```
+
+### Runs are missing after an update
+
+Symptom: after loading a new bundle, HITL reports "No resolution runs found"
+although earlier runs exist.
+
+Cause: the new version was started from a different folder than the one
+holding your `data/` folder, so the bind mounts point at empty folders.
+
+Fix: stop the service, copy `docker-compose.yml` into the folder that
+contains `data/`, and start it again from there:
+```bash
+docker compose down
+cd <your-nerine-folder>
+docker compose up hitl
+```
+Your runs were never deleted; the container was only looking in the wrong
+place.
 
 ### Host filesystem shows files owned by root
 
